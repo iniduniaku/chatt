@@ -1348,3 +1348,650 @@ function markMessageAsRead(messageId) {
         roomId: currentRoom 
     });
         }
+
+// =====================================
+// PASSWORD & SECURITY
+// =====================================
+function togglePassword(inputId) {
+    const input = document.getElementById(inputId);
+    const icon = input.parentElement.querySelector('.toggle-password');
+    
+    if (input.type === 'password') {
+        input.type = 'text';
+        icon.classList.remove('fa-eye');
+        icon.classList.add('fa-eye-slash');
+    } else {
+        input.type = 'password';
+        icon.classList.remove('fa-eye-slash');
+        icon.classList.add('fa-eye');
+    }
+}
+
+function checkPasswordStrength(e) {
+    const password = e.target.value;
+    const strengthFill = document.querySelector('.strength-fill');
+    const strengthText = document.querySelector('.strength-text');
+    
+    let strength = 0;
+    let strengthLabel = '';
+    
+    // Length check
+    if (password.length >= 8) strength++;
+    if (password.length >= 12) strength++;
+    
+    // Character variety checks
+    if (/[a-z]/.test(password)) strength++;
+    if (/[A-Z]/.test(password)) strength++;
+    if (/\d/.test(password)) strength++;
+    if (/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) strength++;
+    
+    // Determine strength level
+    if (strength <= 2) {
+        strengthFill.className = 'strength-fill weak';
+        strengthLabel = 'Lemah';
+    } else if (strength <= 4) {
+        strengthFill.className = 'strength-fill medium';
+        strengthLabel = 'Sedang';
+    } else {
+        strengthFill.className = 'strength-fill strong';
+        strengthLabel = 'Kuat';
+    }
+    
+    strengthText.textContent = `Kekuatan password: ${strengthLabel}`;
+}
+
+function showChangePassword() {
+    // Implementation for change password modal
+    showToast('Fitur ubah password akan segera tersedia', 'info');
+}
+
+// =====================================
+// MESSAGE CONTEXT MENU
+// =====================================
+function showMessageContextMenu(e, messageId) {
+    // Remove existing context menu
+    const existingMenu = document.querySelector('.message-context-menu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+    
+    const contextMenu = document.createElement('div');
+    contextMenu.className = 'message-context-menu';
+    contextMenu.innerHTML = `
+        <div class="context-menu-item" onclick="deleteMessage('${messageId}', false)">
+            <i class="fas fa-trash"></i>
+            <span>Hapus untuk saya</span>
+        </div>
+        <div class="context-menu-item" onclick="deleteMessage('${messageId}', true)">
+            <i class="fas fa-trash-alt"></i>
+            <span>Hapus untuk semua</span>
+        </div>
+        <div class="context-menu-item" onclick="copyMessage('${messageId}')">
+            <i class="fas fa-copy"></i>
+            <span>Salin pesan</span>
+        </div>
+    `;
+    
+    // Position context menu
+    contextMenu.style.position = 'fixed';
+    contextMenu.style.top = e.clientY + 'px';
+    contextMenu.style.left = e.clientX + 'px';
+    contextMenu.style.background = 'var(--bg-secondary)';
+    contextMenu.style.border = '1px solid var(--border-color)';
+    contextMenu.style.borderRadius = 'var(--border-radius)';
+    contextMenu.style.boxShadow = 'var(--shadow-medium)';
+    contextMenu.style.zIndex = '1000';
+    contextMenu.style.minWidth = '180px';
+    
+    document.body.appendChild(contextMenu);
+    
+    // Remove menu when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function removeContextMenu(event) {
+            if (!contextMenu.contains(event.target)) {
+                contextMenu.remove();
+                document.removeEventListener('click', removeContextMenu);
+            }
+        });
+    }, 0);
+}
+
+function deleteMessage(messageId, forEveryone) {
+    const confirmMessage = forEveryone ? 
+        'Yakin ingin menghapus pesan untuk semua orang?' : 
+        'Yakin ingin menghapus pesan untuk Anda?';
+    
+    if (confirm(confirmMessage)) {
+        socket.emit('dm:delete', {
+            roomId: currentRoom,
+            messageId: messageId,
+            forEveryone: forEveryone
+        }, (response) => {
+            if (response.success) {
+                if (forEveryone) {
+                    // Remove message element
+                    const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+                    if (messageElement) {
+                        messageElement.remove();
+                    }
+                } else {
+                    // Replace with deleted message indicator
+                    const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+                    if (messageElement) {
+                        const bubble = messageElement.querySelector('.message-bubble');
+                        bubble.innerHTML = `
+                            <div class="message-content" style="font-style: italic; opacity: 0.7;">
+                                <i class="fas fa-ban"></i> Pesan dihapus
+                            </div>
+                            <div class="message-footer">
+                                <span class="message-time">${bubble.querySelector('.message-time').textContent}</span>
+                            </div>
+                        `;
+                    }
+                }
+                showToast('Pesan berhasil dihapus', 'success');
+            } else {
+                showToast('Gagal menghapus pesan', 'error');
+            }
+        });
+    }
+    
+    // Remove context menu
+    const contextMenu = document.querySelector('.message-context-menu');
+    if (contextMenu) {
+        contextMenu.remove();
+    }
+}
+
+function copyMessage(messageId) {
+    const messageElement = document.querySelector(`[data-message-id="${messageId}"]`);
+    if (messageElement) {
+        const messageContent = messageElement.querySelector('.message-content');
+        if (messageContent) {
+            navigator.clipboard.writeText(messageContent.textContent).then(() => {
+                showToast('Pesan berhasil disalin', 'success');
+            }).catch(() => {
+                showToast('Gagal menyalin pesan', 'error');
+            });
+        }
+    }
+    
+    // Remove context menu
+    const contextMenu = document.querySelector('.message-context-menu');
+    if (contextMenu) {
+        contextMenu.remove();
+    }
+}
+
+// =====================================
+// EMOJI PICKER
+// =====================================
+function showEmojiPicker() {
+    // Simple emoji picker - you can replace with a more sophisticated one
+    const emojis = ['😀', '😃', '😄', '😁', '😊', '😍', '🥰', '😘', '😗', '😙', '😚', '🙂', '🤗', '🤔', '😐', '😑', '🙄', '😏', '😣', '😥', '😮', '🤐', '😯', '😪', '😫', '🥱', '😴', '😌', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭', '🤫', '🤨', '😒', '🙃', '😔', '😕', '🙁', '😖', '😟', '😤', '😢', '😭', '😦', '😧', '😨', '😩', '🤯', '😬', '😰', '😱', '🥵', '🥶', '😳', '🤪', '😵', '🥴', '😷', '🤒', '🤕', '🤢', '🤮', '🤧', '😇', '🥳', '🥺', '🤠', '🤡', '🤥', '🤫', '🤭', '🧐', '🤓', '😈', '👿', '👹', '👺', '💀', '☠️', '👻', '👽', '👾', '🤖', '🎃', '😺', '😸', '😹', '😻', '😼', '😽', '🙀', '😿', '😾'];
+    
+    // Remove existing emoji picker
+    const existingPicker = document.querySelector('.emoji-picker');
+    if (existingPicker) {
+        existingPicker.remove();
+        return;
+    }
+    
+    const emojiPicker = document.createElement('div');
+    emojiPicker.className = 'emoji-picker';
+    emojiPicker.style.cssText = `
+        position: absolute;
+        bottom: 60px;
+        right: 10px;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border-color);
+        border-radius: var(--border-radius);
+        padding: var(--spacing-md);
+        max-width: 280px;
+        max-height: 200px;
+        overflow-y: auto;
+        z-index: 100;
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: var(--spacing-xs);
+        box-shadow: var(--shadow-medium);
+    `;
+    
+    emojis.forEach(emoji => {
+        const emojiButton = document.createElement('button');
+        emojiButton.textContent = emoji;
+        emojiButton.style.cssText = `
+            background: none;
+            border: none;
+            font-size: 20px;
+            padding: var(--spacing-xs);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background var(--transition-fast);
+        `;
+        
+        emojiButton.addEventListener('click', () => {
+            insertEmoji(emoji);
+            emojiPicker.remove();
+        });
+        
+        emojiButton.addEventListener('mouseenter', () => {
+            emojiButton.style.background = 'rgba(255, 255, 255, 0.1)';
+        });
+        
+        emojiButton.addEventListener('mouseleave', () => {
+            emojiButton.style.background = 'none';
+        });
+        
+        emojiPicker.appendChild(emojiButton);
+    });
+    
+    document.getElementById('inputContainer').appendChild(emojiPicker);
+    
+    // Close picker when clicking outside
+    setTimeout(() => {
+        document.addEventListener('click', function closePicker(event) {
+            if (!emojiPicker.contains(event.target) && !event.target.classList.contains('emoji-btn')) {
+                emojiPicker.remove();
+                document.removeEventListener('click', closePicker);
+            }
+        });
+    }, 0);
+}
+
+function insertEmoji(emoji) {
+    const messageInput = document.getElementById('messageInput');
+    const cursorPos = messageInput.selectionStart;
+    const textBefore = messageInput.value.substring(0, cursorPos);
+    const textAfter = messageInput.value.substring(messageInput.selectionEnd);
+    
+    messageInput.value = textBefore + emoji + textAfter;
+    messageInput.focus();
+    
+    // Set cursor position after emoji
+    const newCursorPos = cursorPos + emoji.length;
+    messageInput.setSelectionRange(newCursorPos, newCursorPos);
+    
+    // Trigger input event to update UI
+    messageInput.dispatchEvent(new Event('input'));
+}
+
+// =====================================
+// VOICE RECORDING
+// =====================================
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
+function startVoiceRecording() {
+    if (isRecording) {
+        stopVoiceRecording();
+        return;
+    }
+    
+    navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+            
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+            
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const audioFile = new File([audioBlob], 'voice-message.wav', { type: 'audio/wav' });
+                
+                // Show file preview and prepare for sending
+                showFilePreview(audioFile);
+                document.getElementById('fileInput').files = createFileList([audioFile]);
+            };
+            
+            mediaRecorder.start();
+            isRecording = true;
+            
+            // Update UI
+            const micBtn = document.getElementById('micBtn');
+            micBtn.innerHTML = '<i class="fas fa-stop"></i>';
+            micBtn.style.background = 'var(--text-error)';
+            
+            showToast('Rekaman dimulai...', 'info');
+            
+        })
+        .catch(error => {
+            console.error('Voice recording error:', error);
+            showToast('Gagal memulai rekaman suara', 'error');
+        });
+}
+
+function stopVoiceRecording() {
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+        isRecording = false;
+        
+        // Reset UI
+        const micBtn = document.getElementById('micBtn');
+        micBtn.innerHTML = '<i class="fas fa-microphone"></i>';
+        micBtn.style.background = 'linear-gradient(135deg, var(--primary-color), var(--primary-hover))';
+        
+        showToast('Rekaman selesai', 'success');
+    }
+}
+
+// Helper function to create FileList
+function createFileList(files) {
+    const dataTransfer = new DataTransfer();
+    files.forEach(file => dataTransfer.items.add(file));
+    return dataTransfer.files;
+}
+
+// =====================================
+// IMAGE MODAL
+// =====================================
+function openImageModal(imageSrc) {
+    // Remove existing modal
+    const existingModal = document.querySelector('.image-modal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    const imageModal = document.createElement('div');
+    imageModal.className = 'image-modal';
+    imageModal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 2000;
+        backdrop-filter: blur(5px);
+    `;
+    
+    imageModal.innerHTML = `
+        <div style="position: relative; max-width: 90%; max-height: 90%;">
+            <img src="${imageSrc}" style="max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--border-radius);">
+            <button onclick="this.parentElement.parentElement.remove()" 
+                    style="position: absolute; top: -40px; right: 0; background: rgba(255, 255, 255, 0.2); border: none; 
+                           color: white; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; 
+                           display: flex; align-items: center; justify-content: center; font-size: 14px;">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    `;
+    
+    // Close on click outside
+    imageModal.addEventListener('click', (e) => {
+        if (e.target === imageModal) {
+            imageModal.remove();
+        }
+    });
+    
+    // Close on escape key
+    document.addEventListener('keydown', function closeOnEscape(e) {
+        if (e.key === 'Escape') {
+            imageModal.remove();
+            document.removeEventListener('keydown', closeOnEscape);
+        }
+    });
+    
+    document.body.appendChild(imageModal);
+}
+
+// =====================================
+// TOAST NOTIFICATIONS
+// =====================================
+function showToast(message, type = 'info', onClick = null) {
+    const toastContainer = document.getElementById('toastContainer');
+    
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+    
+    const icons = {
+        success: 'fa-check-circle',
+        error: 'fa-exclamation-circle',
+        warning: 'fa-exclamation-triangle',
+        info: 'fa-info-circle'
+    };
+    
+    const titles = {
+        success: 'Berhasil',
+        error: 'Error',
+        warning: 'Peringatan',
+        info: 'Info'
+    };
+    
+    toast.innerHTML = `
+        <div class="toast-content">
+            <div class="toast-icon">
+                <i class="fas ${icons[type]}"></i>
+            </div>
+            <div class="toast-message">
+                <div class="toast-title">${titles[type]}</div>
+                <div class="toast-text">${message}</div>
+            </div>
+            <button class="toast-close" onclick="this.parentElement.parentElement.remove()">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div class="toast-progress"></div>
+    `;
+    
+    if (onClick) {
+        toast.style.cursor = 'pointer';
+        toast.addEventListener('click', onClick);
+    }
+    
+    toastContainer.appendChild(toast);
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+        if (toast.parentElement) {
+            toast.style.animation = 'slideOutRight 0.3s ease forwards';
+            setTimeout(() => toast.remove(), 300);
+        }
+    }, 5000);
+}
+
+// =====================================
+// CONNECTION STATUS
+// =====================================
+function showConnectionStatus(message, isConnected, icon = 'fas fa-wifi') {
+    const statusBar = document.getElementById('connectionStatus');
+    const statusIcon = document.getElementById('connectionIcon');
+    const statusMessage = document.getElementById('connectionMessage');
+    
+    statusIcon.className = icon;
+    statusMessage.textContent = message;
+    
+    statusBar.className = `connection-status ${isConnected ? 'connected' : ''} show`;
+    
+    if (isConnected) {
+        setTimeout(() => {
+            statusBar.classList.remove('show');
+        }, 3000);
+    }
+}
+
+function hideConnectionStatus() {
+    const statusBar = document.getElementById('connectionStatus');
+    statusBar.classList.remove('show');
+}
+
+// =====================================
+// NETWORK STATUS
+// =====================================
+function handleOnline() {
+    showConnectionStatus('Kembali terhubung', true, 'fas fa-wifi');
+    
+    // Reconnect socket if needed
+    if (socket && !socket.connected) {
+        socket.connect();
+    }
+}
+
+function handleOffline() {
+    showConnectionStatus('Tidak ada koneksi internet', false, 'fas fa-wifi-slash');
+}
+
+// =====================================
+// CLEANUP & UTILITIES
+// =====================================
+function handleBeforeUnload(e) {
+    if (isCallActive) {
+        e.preventDefault();
+        e.returnValue = 'Ada panggilan yang sedang aktif. Yakin ingin meninggalkan halaman?';
+        return e.returnValue;
+    }
+}
+
+function setButtonLoading(button, loading) {
+    const loader = button.querySelector('.btn-loader');
+    const span = button.querySelector('span');
+    
+    if (loading) {
+        button.classList.add('loading');
+        button.disabled = true;
+        if (loader) loader.style.display = 'block';
+        if (span) span.style.display = 'none';
+    } else {
+        button.classList.remove('loading');
+        button.disabled = false;
+        if (loader) loader.style.display = 'none';
+        if (span) span.style.display = 'inline';
+    }
+}
+
+function showError(elementId, message) {
+    const errorElement = document.getElementById(elementId);
+    errorElement.textContent = message;
+    errorElement.classList.add('show');
+    
+    // Auto hide after 5 seconds
+    setTimeout(() => {
+        hideError(elementId);
+    }, 5000);
+}
+
+function hideError(elementId) {
+    const errorElement = document.getElementById(elementId);
+    errorElement.classList.remove('show');
+}
+
+function showSuccess(elementId, message) {
+    const successElement = document.getElementById(elementId);
+    successElement.textContent = message;
+    successElement.classList.add('show');
+    
+    // Auto hide after 5 seconds
+    setTimeout(() => {
+        successElement.classList.remove('show');
+    }, 5000);
+}
+
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, (m) => map[m]);
+}
+
+function formatTime(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diffTime = now - date;
+    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays === 0) {
+        return date.toLocaleTimeString('id-ID', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+    } else if (diffDays === 1) {
+        return 'Kemarin';
+    } else if (diffDays < 7) {
+        return date.toLocaleDateString('id-ID', { 
+            weekday: 'short' 
+        });
+    } else {
+        return date.toLocaleDateString('id-ID', {
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit'
+        });
+    }
+}
+
+function formatFileSize(bytes) {
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    if (bytes === 0) return '0 Bytes';
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
+}
+
+// Debounce function for search
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
+            clearTimeout(timeout);
+            func(...args);
+        };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+// =====================================
+// KEYBOARD SHORTCUTS
+// =====================================
+document.addEventListener('keydown', (e) => {
+    // ESC to close modals
+    if (e.key === 'Escape') {
+        const openModal = document.querySelector('.modal.show');
+        if (openModal) {
+            closeModal(openModal.id);
+        }
+        
+        // Close emoji picker
+        const emojiPicker = document.querySelector('.emoji-picker');
+        if (emojiPicker) {
+            emojiPicker.remove();
+        }
+        
+        // Close context menu
+        const contextMenu = document.querySelector('.message-context-menu');
+        if (contextMenu) {
+            contextMenu.remove();
+        }
+    }
+    
+    // Ctrl/Cmd + K for user search
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        if (currentUser) {
+            showUserSearch();
+        }
+    }
+    
+    // Ctrl/Cmd + / for chat search
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        if (currentUser) {
+            document.getElementById('chatSearch').focus();
+        }
+    }
+});
+
+// =====================================
+// INITIALIZATION CHECK
+// =====================================
+console.log('🎉 ChatVibe JavaScript loaded successfully!');
