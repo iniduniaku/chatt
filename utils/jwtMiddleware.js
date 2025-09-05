@@ -4,6 +4,40 @@ const { readJSON, getFilePath } = require('./fileDB');
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 const USERS_FILE = getFilePath('users');
 
+// Rate limiting for JWT verification
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
+const RATE_LIMIT_MAX_ATTEMPTS = 100; // Max attempts per window
+
+/**
+ * Rate limiting function
+ * @param {string} identifier - IP or user identifier
+ * @returns {boolean} True if allowed, false if rate limited
+ */
+function checkRateLimit(identifier) {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW;
+  
+  if (!rateLimitMap.has(identifier)) {
+    rateLimitMap.set(identifier, []);
+  }
+  
+  const attempts = rateLimitMap.get(identifier);
+  
+  // Remove old attempts
+  const recentAttempts = attempts.filter(time => time > windowStart);
+  rateLimitMap.set(identifier, recentAttempts);
+  
+  // Check if rate limit exceeded
+  if (recentAttempts.length >= RATE_LIMIT_MAX_ATTEMPTS) {
+    return false;
+  }
+  
+  // Add current attempt
+  recentAttempts.push(now);
+  return true;
+}
+
 /**
  * JWT Authentication Middleware
  * @param {Request} req - Express request object
@@ -11,7 +45,18 @@ const USERS_FILE = getFilePath('users');
  * @param {Function} next - Express next function
  */
 function authMiddleware(req, res, next) {
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  
   try {
+    // Rate limiting
+    if (!checkRateLimit(clientIP)) {
+      console.warn(`⚠️ Rate limit exceeded for IP: ${clientIP}`);
+      return res.status(429).json({ 
+        message: 'Too many requests. Please try again later.',
+        code: 'RATE_LIMIT_EXCEEDED'
+      });
+    }
+    
     const authHeader = req.headers.authorization;
     
     // Check if authorization header exists
@@ -89,7 +134,7 @@ function authMiddleware(req, res, next) {
     next();
     
   } catch (error) {
-    console.error('JWT Middleware Error:', error.message);
+    console.error(`❌ JWT Middleware Error for IP ${clientIP}:`, error.message);
     
     // Handle specific JWT errors
     if (error.name === 'TokenExpiredError') {
@@ -210,7 +255,7 @@ function generateToken(user, expiresIn = '7d') {
     return jwt.sign(payload, JWT_SECRET, options);
     
   } catch (error) {
-    console.error('Token generation error:', error);
+    console.error('❌ Token generation error:', error);
     throw new Error('Failed to generate token');
   }
 }
@@ -249,7 +294,7 @@ function verifyToken(token) {
     };
     
   } catch (error) {
-    console.error('Token verification error:', error);
+    console.error('❌ Token verification error:', error);
     return null;
   }
 }
@@ -272,8 +317,43 @@ function extractToken(authHeader) {
   return parts[1] || null;
 }
 
+/**
+ * Clean up rate limit data periodically
+ */
+function cleanupRateLimit() {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW;
+  
+  for (const [identifier, attempts] of rateLimitMap.entries()) {
+    const recentAttempts = attempts.filter(time => time > windowStart);
+    
+    if (recentAttempts.length === 0) {
+      rateLimitMap.delete(identifier);
+    } else {
+      rateLimitMap.set(identifier, recentAttempts);
+    }
+  }
+}
+
+// Clean up rate limit data every 5 minutes
+setInterval(cleanupRateLimit, 5 * 60 * 1000);
+
+/**
+ * Get rate limit stats for monitoring
+ * @returns {object} Rate limit statistics
+ */
+function getRateLimitStats() {
+  return {
+    totalTrackedIPs: rateLimitMap.size,
+    windowSizeMinutes: RATE_LIMIT_WINDOW / (60 * 1000),
+    maxAttemptsPerWindow: RATE_LIMIT_MAX_ATTEMPTS
+  };
+}
+
 module.exports = authMiddleware;
 module.exports.optionalAuth = optionalAuthMiddleware;
 module.exports.generateToken = generateToken;
 module.exports.verifyToken = verifyToken;
 module.exports.extractToken = extractToken;
+module.exports.getRateLimitStats = getRateLimitStats;
+module.exports.cleanupRateLimit = cleanupRateLimit;
