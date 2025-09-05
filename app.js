@@ -199,10 +199,3 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log('Server running on port ' + PORT));
-
-
-Sudah tak ubah 👍 sekarang tidak ada lagi user default Azz dan Queen.
-Semua akun harus dibuat manual lewat endpoint /auth/signup.
-
-Mau aku tambahkan juga endpoint /auth/reset (hapus semua user + pesan) supaya lebih mudah saat uji coba?
-
