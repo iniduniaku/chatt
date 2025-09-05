@@ -1,4 +1,3 @@
-// app.js
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -7,7 +6,6 @@ const path = require('path');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const webpush = require('web-push');
 const { readJSON, writeJSON, getFilePath } = require('./utils/fileDB');
 const authMiddleware = require('./utils/jwtMiddleware');
 
@@ -19,27 +17,20 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
 
-// ==== File JSON ====
+// File paths
 const USERS_FILE = getFilePath('users');
 const MESSAGES_FILE = getFilePath('messages');
 const LAST_SEEN_FILE = getFilePath('last_seen');
-const SUBSCRIBERS_FILE = getFilePath('subscribers');
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
-const defaults = {
-  [USERS_FILE]: [],
-  [MESSAGES_FILE]: {},
-  [LAST_SEEN_FILE]: {},
-  [SUBSCRIBERS_FILE]: {}
-};
-
-Object.entries(defaults).forEach(([file, def]) => {
+// Inisialisasi file JSON jika belum ada
+[USERS_FILE, MESSAGES_FILE, LAST_SEEN_FILE].forEach(file => {
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, JSON.stringify(def, null, 2));
+    fs.writeFileSync(file, file.endsWith('.json') ? '{}' : '[]');
   }
 });
 
-// ==== Multer setup ====
+// Multer setup untuk upload media
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = path.join(__dirname, 'public/uploads');
@@ -47,19 +38,20 @@ const storage = multer.diskStorage({
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1E9);
     cb(null, unique + path.extname(file.originalname));
   }
 });
 const upload = multer({ storage });
 
-// ==== Routes ====
 app.post('/upload', authMiddleware, upload.single('media'), (req, res) => {
   res.json({ url: `/uploads/${req.file.filename}` });
 });
 
+// Auth routes
 app.use('/auth', require('./routes/authRoutes'));
 
+// Search user
 app.get('/users/search', authMiddleware, (req, res) => {
   const q = (req.query.q || '').toLowerCase();
   const users = readJSON(USERS_FILE);
@@ -69,25 +61,7 @@ app.get('/users/search', authMiddleware, (req, res) => {
   res.json(results);
 });
 
-// ==== Push Notification ====
-webpush.setVapidDetails(
-  'mailto:you@example.com',
-  process.env.VAPID_PUBLIC_KEY || '',
-  process.env.VAPID_PRIVATE_KEY || ''
-);
-
-app.post('/subscribe', authMiddleware, (req, res) => {
-  const subs = readJSON(SUBSCRIBERS_FILE);
-  subs[req.user.username] = req.body;
-  writeJSON(SUBSCRIBERS_FILE, subs);
-  res.json({ success: true });
-});
-
-// ==== Socket.IO ====
-function getRoomId(u1, u2) {
-  return ['dm', [u1, u2].sort().join('::')].join(':');
-}
-
+// Socket.IO auth
 io.use((socket, next) => {
   const token = socket.handshake.auth.token;
   try {
@@ -98,10 +72,13 @@ io.use((socket, next) => {
   }
 });
 
+function getRoomId(u1, u2) {
+  return ['dm', [u1, u2].sort().join('::')].join(':');
+}
+
 io.on('connection', (socket) => {
   const { username } = socket.user;
 
-  // Join DM room
   socket.on('dm:join', (otherUser, cb) => {
     const roomId = getRoomId(username, otherUser);
     socket.join(roomId);
@@ -109,7 +86,6 @@ io.on('connection', (socket) => {
     cb({ roomId, messages });
   });
 
-  // Send message
   socket.on('dm:message', ({ to, text, media }, cb) => {
     const roomId = getRoomId(username, to);
     const messages = readJSON(MESSAGES_FILE);
@@ -129,27 +105,9 @@ io.on('connection', (socket) => {
     writeJSON(MESSAGES_FILE, messages);
 
     io.to(roomId).emit('dm:message', message);
-
-    // Push notification
-    const subs = readJSON(SUBSCRIBERS_FILE);
-    const recipientSub = subs[to];
-    if (recipientSub) {
-      webpush.sendNotification(recipientSub, JSON.stringify({
-        title: `Pesan baru dari ${username}`,
-        body: text || 'Media diterima'
-      }))
-      .catch(err => {
-        console.error('Push error:', err);
-        // Hapus subscription kalau invalid
-        delete subs[to];
-        writeJSON(SUBSCRIBERS_FILE, subs);
-      });
-    }
-
     cb({ success: true, message });
   });
 
-  // Delete message
   socket.on('dm:delete', ({ roomId, messageId, forEveryone }, cb) => {
     const messages = readJSON(MESSAGES_FILE);
     if (!messages[roomId]) return cb({ success: false, error: 'Room not found' });
@@ -160,7 +118,7 @@ io.on('connection', (socket) => {
       if (msg.id === messageId) {
         if (forEveryone && msg.from === username) {
           updated = true;
-          return null; // hapus untuk semua
+          return null;
         } else {
           if (!msg.deletedFor.includes(username)) {
             msg.deletedFor.push(username);
@@ -176,11 +134,44 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('dm:delete', { messageId, by: username, forEveryone });
       cb({ success: true });
     } else {
-      cb({ success: false, error: 'Message not found' });
+      cb({ success: false, error: 'Message not found or not allowed' });
     }
+  });
+
+  // WebRTC signaling for voice & video
+  socket.on('call:offer', ({ to, offer }) => {
+    io.to(getRoomId(username, to)).emit('call:offer', { from: username, offer });
+  });
+
+  socket.on('call:answer', ({ to, answer }) => {
+    io.to(getRoomId(username, to)).emit('call:answer', { from: username, answer });
+  });
+
+  socket.on('call:candidate', ({ to, candidate }) => {
+    io.to(getRoomId(username, to)).emit('call:candidate', { from: username, candidate });
+  });
+
+  socket.on('video:offer', ({ to, offer }) => {
+    io.to(getRoomId(username, to)).emit('video:offer', { from: username, offer });
+  });
+
+  socket.on('video:answer', ({ to, answer }) => {
+    io.to(getRoomId(username, to)).emit('video:answer', { from: username, answer });
+  });
+
+  socket.on('video:candidate', ({ to, candidate }) => {
+    io.to(getRoomId(username, to)).emit('video:candidate', { from: username, candidate });
+  });
+
+  socket.on('disconnect', () => {
+    const lastSeen = readJSON(LAST_SEEN_FILE);
+    lastSeen[username] = Date.now();
+    writeJSON(LAST_SEEN_FILE, lastSeen);
   });
 });
 
-// ==== Start Server ====
-const PORT = process.env.PORT || 80;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// ✅ Server listen
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`✅ Chat server running on http://localhost:${PORT}`);
+});
