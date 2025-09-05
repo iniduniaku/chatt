@@ -16,7 +16,13 @@ const io = new Server(server, { cors: { origin: '*' } });
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'public/uploads')));
+// Serve file statis (frontend) dari folder public
+app.use(express.static(path.join(__dirname, 'public')));
 
+// Atur root agar buka index.html
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public/index.html'));
+});
 // File paths
 const USERS_FILE = getFilePath('users');
 const MESSAGES_FILE = getFilePath('messages');
