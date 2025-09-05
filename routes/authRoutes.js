@@ -89,7 +89,7 @@ router.post('/register', validateUserInput, async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Registration error:', error);
+    console.error('❌ Registration error:', error);
     res.status(500).json({ 
       message: 'Internal server error during registration' 
     });
@@ -172,7 +172,7 @@ router.post('/login', validateUserInput, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Login error:', error);
+    console.error('❌ Login error:', error);
     res.status(500).json({ 
       message: 'Internal server error during login' 
     });
@@ -218,7 +218,7 @@ router.get('/verify', (req, res) => {
       return res.status(401).json({ message: 'Token expired' });
     }
     
-    console.error('Token verification error:', error);
+    console.error('❌ Token verification error:', error);
     res.status(401).json({ message: 'Invalid token' });
   }
 });
@@ -243,7 +243,7 @@ router.get('/profile', require('../utils/jwtMiddleware'), (req, res) => {
     });
     
   } catch (error) {
-    console.error('Get profile error:', error);
+    console.error('❌ Get profile error:', error);
     res.status(500).json({ message: 'Failed to get profile' });
   }
 });
@@ -295,9 +295,30 @@ router.put('/password', require('../utils/jwtMiddleware'), async (req, res) => {
     res.json({ message: 'Password updated successfully' });
     
   } catch (error) {
-    console.error('Update password error:', error);
+    console.error('❌ Update password error:', error);
     res.status(500).json({ message: 'Failed to update password' });
   }
 });
+
+// Get all users endpoint (for admin/debugging - REMOVE IN PRODUCTION)
+if (process.env.NODE_ENV !== 'production') {
+  router.get('/users', require('../utils/jwtMiddleware'), (req, res) => {
+    try {
+      const users = readJSON(USERS_FILE);
+      const safeUsers = users.map(user => ({
+        id: user.id,
+        username: user.username,
+        createdAt: user.createdAt,
+        lastLogin: user.lastLogin,
+        isActive: user.isActive
+      }));
+      
+      res.json({ users: safeUsers });
+    } catch (error) {
+      console.error('❌ Get users error:', error);
+      res.status(500).json({ message: 'Failed to get users' });
+    }
+  });
+}
 
 module.exports = router;
