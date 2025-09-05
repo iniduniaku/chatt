@@ -1,24 +1,31 @@
 {
-  "name": "chat-app-backend",
+  "name": "whatsapp-clone-backend",
   "version": "1.0.0",
-  "description": "Backend server for 1-on-1 chat app using Express and Socket.IO",
+  "description": "WhatsApp Clone Backend with Socket.io",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js"
   },
-  "keywords": ["chat", "express", "socket.io", "webrtc", "json-db"],
-  "author": "Your Name",
-  "license": "MIT",
   "dependencies": {
-    "bcrypt": "^5.1.0",
-    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.0",
+    "socket.io": "^4.7.2",
     "multer": "^1.4.5-lts.1",
-    "socket.io": "^4.7.2"
+    "jsonwebtoken": "^9.0.2",
+    "cors": "^2.8.5",
+    "bcrypt": "^5.1.1",
+    "http": "^0.0.1-security"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
-  }
+  },
+  "keywords": [
+    "whatsapp",
+    "clone",
+    "socket.io",
+    "express",
+    "webrtc"
+  ],
+  "author": "Your Name",
+  "license": "MIT"
 }
