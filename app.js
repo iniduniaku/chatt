@@ -171,7 +171,7 @@ io.on('connection', (socket) => {
 });
 
 // ✅ Server listen
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80;
 server.listen(PORT, () => {
   console.log(`✅ Chat server running on http://localhost:${PORT}`);
 });
