@@ -40,7 +40,7 @@ const CHAT_ROOMS_FILE = getFilePath('chat_rooms');
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
 // Initialize JSON files
-console.log('Initializing database files...');
+console.log('🚀 Initializing database files...');
 if (!fs.existsSync(USERS_FILE)) {
   writeJSON(USERS_FILE, []);
   console.log('✅ Users file created');
@@ -103,7 +103,7 @@ app.post('/upload', authMiddleware, upload.single('media'), (req, res) => {
     }
 
     const fileUrl = `/uploads/${req.file.filename}`;
-    console.log(`✅ File uploaded: ${fileUrl}`);
+    console.log(`📁 File uploaded: ${fileUrl}`);
     
     res.json({ 
       url: fileUrl,
@@ -113,7 +113,7 @@ app.post('/upload', authMiddleware, upload.single('media'), (req, res) => {
       mimetype: req.file.mimetype
     });
   } catch (error) {
-    console.error('Upload error:', error);
+    console.error('❌ Upload error:', error);
     res.status(500).json({ error: 'Upload failed' });
   }
 });
@@ -134,7 +134,8 @@ app.get('/users/search', authMiddleware, (req, res) => {
     const results = users
       .filter(user => 
         user.username.toLowerCase().includes(query) && 
-        user.username !== req.user.username
+        user.username !== req.user.username &&
+        user.isActive !== false
       )
       .map(user => ({
         id: user.id,
@@ -144,7 +145,7 @@ app.get('/users/search', authMiddleware, (req, res) => {
 
     res.json(results);
   } catch (error) {
-    console.error('Search error:', error);
+    console.error('❌ Search error:', error);
     res.status(500).json({ error: 'Search failed' });
   }
 });
@@ -153,33 +154,10 @@ app.get('/users/search', authMiddleware, (req, res) => {
 app.get('/chats', authMiddleware, (req, res) => {
   try {
     const username = req.user.username;
-    const messages = readJSON(MESSAGES_FILE);
-    const lastSeen = readJSON(LAST_SEEN_FILE);
-    
-    const chatList = {};
-    
-    // Find all rooms user is part of
-    Object.keys(messages).forEach(roomId => {
-      if (roomId.includes(username)) {
-        const roomMessages = messages[roomId];
-        if (roomMessages && roomMessages.length > 0) {
-          const lastMessage = roomMessages[roomMessages.length - 1];
-          const otherUser = roomId.replace('dm:', '').split('::').find(u => u !== username);
-          
-          if (otherUser) {
-            chatList[otherUser] = {
-              lastMessage: lastMessage.text || 'Media',
-              timestamp: lastMessage.timestamp,
-              unread: 0 // Can be calculated based on readBy
-            };
-          }
-        }
-      }
-    });
-    
+    const chatList = getUserChatList(username);
     res.json(chatList);
   } catch (error) {
-    console.error('Get chats error:', error);
+    console.error('❌ Get chats error:', error);
     res.status(500).json({ error: 'Failed to get chats' });
   }
 });
@@ -194,10 +172,10 @@ io.use((socket, next) => {
 
     const decoded = jwt.verify(token, JWT_SECRET);
     socket.user = decoded;
-    console.log(`✅ User ${decoded.username} connected`);
+    console.log(`🔌 User ${decoded.username} connecting...`);
     next();
   } catch (error) {
-    console.error('Socket auth error:', error);
+    console.error('❌ Socket auth error:', error);
     next(new Error('Invalid token'));
   }
 });
@@ -208,12 +186,72 @@ function getRoomId(user1, user2) {
   return `dm:${sortedUsers.join('::')}`;
 }
 
-// Active users tracking
+// Function to get user's chat list
+function getUserChatList(username) {
+  try {
+    const messages = readJSON(MESSAGES_FILE);
+    const lastSeen = readJSON(LAST_SEEN_FILE);
+    
+    const chatList = [];
+    
+    // Find all rooms user is part of
+    Object.keys(messages).forEach(roomId => {
+      if (roomId.includes(username)) {
+        const roomMessages = messages[roomId];
+        if (roomMessages && roomMessages.length > 0) {
+          // Filter messages not deleted for this user
+          const visibleMessages = roomMessages.filter(msg => 
+            !msg.deletedFor || !msg.deletedFor.includes(username)
+          );
+          
+          if (visibleMessages.length > 0) {
+            const lastMessage = visibleMessages[visibleMessages.length - 1];
+            const otherUser = roomId.replace('dm:', '').split('::').find(u => u !== username);
+            
+            if (otherUser) {
+              // Count unread messages
+              const unreadCount = visibleMessages.filter(msg => 
+                msg.from !== username && (!msg.readBy || !msg.readBy.includes(username))
+              ).length;
+
+              chatList.push({
+                username: otherUser,
+                lastMessage: {
+                  text: lastMessage.text || 'Media',
+                  timestamp: lastMessage.timestamp,
+                  from: lastMessage.from
+                },
+                unreadCount: unreadCount,
+                roomId: roomId,
+                lastSeen: lastSeen[otherUser] || null,
+                status: activeUsers.has(otherUser) ? 'online' : 'offline'
+              });
+            }
+          }
+        }
+      }
+    });
+    
+    // Sort by last message timestamp
+    chatList.sort((a, b) => b.lastMessage.timestamp - a.lastMessage.timestamp);
+    
+    return chatList;
+  } catch (error) {
+    console.error('❌ Get user chat list error:', error);
+    return [];
+  }
+}
+
+// Active users and socket tracking
 const activeUsers = new Map();
+const userSockets = new Map();
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   const { username, id } = socket.user;
+  
+  // Track user socket connection
+  userSockets.set(username, socket.id);
   
   // Track active user
   activeUsers.set(username, {
@@ -222,11 +260,31 @@ io.on('connection', (socket) => {
     status: 'online'
   });
 
+  console.log(`✅ User ${username} connected with socket ${socket.id}`);
+
+  // Send user's chat list when they connect
+  socket.emit('chat:list', getUserChatList(username));
+
   // Broadcast user online status
   socket.broadcast.emit('user:status', {
     username: username,
     status: 'online',
     lastSeen: Date.now()
+  });
+
+  // Handle getting chat list
+  socket.on('get:chats', (callback) => {
+    try {
+      const chatList = getUserChatList(username);
+      if (callback) {
+        callback({ success: true, chats: chatList });
+      } else {
+        socket.emit('chat:list', chatList);
+      }
+    } catch (error) {
+      console.error('❌ Get chats error:', error);
+      if (callback) callback({ success: false, error: 'Failed to get chats' });
+    }
   });
 
   // Handle joining DM room
@@ -243,7 +301,7 @@ io.on('connection', (socket) => {
         !msg.deletedFor || !msg.deletedFor.includes(username)
       );
       
-      console.log(`✅ ${username} joined room: ${roomId}`);
+      console.log(`📨 ${username} joined room: ${roomId}`);
       
       if (callback) {
         callback({ 
@@ -253,7 +311,7 @@ io.on('connection', (socket) => {
         });
       }
     } catch (error) {
-      console.error('Join room error:', error);
+      console.error('❌ Join room error:', error);
       if (callback) {
         callback({ success: false, error: 'Failed to join room' });
       }
@@ -291,26 +349,33 @@ io.on('connection', (socket) => {
       messages[roomId].push(message);
       writeJSON(MESSAGES_FILE, messages);
 
-      // Emit to all users in the room
+      // Emit to all users in the room (including sender)
       io.to(roomId).emit('dm:message', message);
-      
-      // Notify the recipient if they're online
-      const recipientUser = activeUsers.get(to);
-      if (recipientUser) {
-        io.to(recipientUser.socketId).emit('notification:message', {
+
+      // Notify recipient even if they're not in the chat room
+      const recipientSocketId = userSockets.get(to);
+      if (recipientSocketId) {
+        // Send new message notification
+        io.to(recipientSocketId).emit('chat:new_message', {
           from: username,
-          message: text || 'Media',
-          timestamp: message.timestamp
+          message: message,
+          roomId: roomId
         });
+
+        // Update recipient's chat list
+        io.to(recipientSocketId).emit('chat:list', getUserChatList(to));
       }
 
-      console.log(`✅ Message sent from ${username} to ${to}`);
+      // Update sender's chat list too
+      socket.emit('chat:list', getUserChatList(username));
+
+      console.log(`💬 Message sent from ${username} to ${to}`);
       
       if (callback) {
         callback({ success: true, message });
       }
     } catch (error) {
-      console.error('Send message error:', error);
+      console.error('❌ Send message error:', error);
       if (callback) {
         callback({ success: false, error: 'Failed to send message' });
       }
@@ -359,7 +424,16 @@ io.on('connection', (socket) => {
           forEveryone: forEveryone
         });
 
-        console.log(`✅ Message ${messageId} deleted by ${username}`);
+        // Update chat lists for both users
+        const roomUsers = roomId.replace('dm:', '').split('::');
+        roomUsers.forEach(user => {
+          const userSocketId = userSockets.get(user);
+          if (userSocketId) {
+            io.to(userSocketId).emit('chat:list', getUserChatList(user));
+          }
+        });
+
+        console.log(`🗑️ Message ${messageId} deleted by ${username}`);
         
         if (callback) {
           callback({ success: true });
@@ -370,186 +444,337 @@ io.on('connection', (socket) => {
         }
       }
     } catch (error) {
-      console.error('Delete message error:', error);
+      console.error('❌ Delete message error:', error);
       if (callback) {
         callback({ success: false, error: 'Failed to delete message' });
       }
     }
   });
 
+  // Handle message read status
+  socket.on('message:read', (data) => {
+    try {
+      const { messageId, roomId } = data;
+      const messages = readJSON(MESSAGES_FILE);
+      
+      if (messages[roomId]) {
+        const message = messages[roomId].find(msg => msg.id === messageId);
+        if (message) {
+          if (!message.readBy) message.readBy = [];
+          if (!message.readBy.includes(username)) {
+            message.readBy.push(username);
+            writeJSON(MESSAGES_FILE, messages);
+            
+            // Notify sender about read status
+            io.to(roomId).emit('message:read', {
+              messageId: messageId,
+              readBy: username
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('❌ Mark message read error:', error);
+    }
+  });
+
   // Handle typing indicators
   socket.on('typing:start', (data) => {
-    const roomId = getRoomId(username, data.to);
-    socket.to(roomId).emit('typing:start', { from: username });
+    try {
+      const roomId = getRoomId(username, data.to);
+      socket.to(roomId).emit('typing:start', { from: username });
+      console.log(`⌨️ ${username} started typing to ${data.to}`);
+    } catch (error) {
+      console.error('❌ Typing start error:', error);
+    }
   });
 
   socket.on('typing:stop', (data) => {
-    const roomId = getRoomId(username, data.to);
-    socket.to(roomId).emit('typing:stop', { from: username });
+    try {
+      const roomId = getRoomId(username, data.to);
+      socket.to(roomId).emit('typing:stop', { from: username });
+      console.log(`⌨️ ${username} stopped typing to ${data.to}`);
+    } catch (error) {
+      console.error('❌ Typing stop error:', error);
+    }
   });
 
   // WebRTC signaling for voice calls
   socket.on('call:offer', (data) => {
-    const { to, offer } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('call:offer', {
-        from: username,
-        offer: offer
-      });
-      console.log(`📞 Voice call offer from ${username} to ${to}`);
+    try {
+      const { to, offer } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('call:offer', {
+          from: username,
+          offer: offer
+        });
+        console.log(`📞 Voice call offer from ${username} to ${to}`);
+      } else {
+        socket.emit('call:error', { error: 'User not online' });
+      }
+    } catch (error) {
+      console.error('❌ Call offer error:', error);
     }
   });
 
   socket.on('call:answer', (data) => {
-    const { to, answer } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('call:answer', {
-        from: username,
-        answer: answer
-      });
-      console.log(`📞 Voice call answered by ${username} to ${to}`);
+    try {
+      const { to, answer } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('call:answer', {
+          from: username,
+          answer: answer
+        });
+        console.log(`📞 Voice call answered by ${username} to ${to}`);
+      }
+    } catch (error) {
+      console.error('❌ Call answer error:', error);
     }
   });
 
   socket.on('call:candidate', (data) => {
-    const { to, candidate } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('call:candidate', {
-        from: username,
-        candidate: candidate
-      });
+    try {
+      const { to, candidate } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('call:candidate', {
+          from: username,
+          candidate: candidate
+        });
+      }
+    } catch (error) {
+      console.error('❌ Call candidate error:', error);
     }
   });
 
   socket.on('call:end', (data) => {
-    const { to } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('call:end', {
-        from: username
-      });
-      console.log(`📞 Call ended by ${username}`);
+    try {
+      const { to } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('call:end', {
+          from: username
+        });
+        console.log(`📞 Call ended by ${username}`);
+      }
+    } catch (error) {
+      console.error('❌ Call end error:', error);
     }
   });
 
   // WebRTC signaling for video calls
   socket.on('video:offer', (data) => {
-    const { to, offer } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('video:offer', {
-        from: username,
-        offer: offer
-      });
-      console.log(`📹 Video call offer from ${username} to ${to}`);
+    try {
+      const { to, offer } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('video:offer', {
+          from: username,
+          offer: offer
+        });
+        console.log(`📹 Video call offer from ${username} to ${to}`);
+      } else {
+        socket.emit('video:error', { error: 'User not online' });
+      }
+    } catch (error) {
+      console.error('❌ Video offer error:', error);
     }
   });
 
   socket.on('video:answer', (data) => {
-    const { to, answer } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('video:answer', {
-        from: username,
-        answer: answer
-      });
-      console.log(`📹 Video call answered by ${username} to ${to}`);
+    try {
+      const { to, answer } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('video:answer', {
+          from: username,
+          answer: answer
+        });
+        console.log(`📹 Video call answered by ${username} to ${to}`);
+      }
+    } catch (error) {
+      console.error('❌ Video answer error:', error);
     }
   });
 
   socket.on('video:candidate', (data) => {
-    const { to, candidate } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('video:candidate', {
-        from: username,
-        candidate: candidate
-      });
+    try {
+      const { to, candidate } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('video:candidate', {
+          from: username,
+          candidate: candidate
+        });
+      }
+    } catch (error) {
+      console.error('❌ Video candidate error:', error);
     }
   });
 
   socket.on('video:end', (data) => {
-    const { to } = data;
-    const recipientUser = activeUsers.get(to);
-    
-    if (recipientUser) {
-      io.to(recipientUser.socketId).emit('video:end', {
-        from: username
-      });
-      console.log(`📹 Video call ended by ${username}`);
+    try {
+      const { to } = data;
+      const recipientSocketId = userSockets.get(to);
+      
+      if (recipientSocketId) {
+        io.to(recipientSocketId).emit('video:end', {
+          from: username
+        });
+        console.log(`📹 Video call ended by ${username}`);
+      }
+    } catch (error) {
+      console.error('❌ Video end error:', error);
     }
   });
 
   // Handle user status updates
   socket.on('user:status', (status) => {
-    const user = activeUsers.get(username);
-    if (user) {
-      user.status = status;
-      user.lastSeen = Date.now();
-      
-      // Broadcast status to all connected users
-      socket.broadcast.emit('user:status', {
-        username: username,
-        status: status,
-        lastSeen: user.lastSeen
-      });
+    try {
+      const user = activeUsers.get(username);
+      if (user) {
+        user.status = status;
+        user.lastSeen = Date.now();
+        
+        // Broadcast status to all connected users
+        socket.broadcast.emit('user:status', {
+          username: username,
+          status: status,
+          lastSeen: user.lastSeen
+        });
+        
+        console.log(`👤 ${username} status: ${status}`);
+      }
+    } catch (error) {
+      console.error('❌ Status update error:', error);
     }
+  });
+
+  // Handle ping/pong for connection health
+  socket.on('ping', () => {
+    socket.emit('pong');
   });
 
   // Handle disconnection
   socket.on('disconnect', (reason) => {
     console.log(`❌ User ${username} disconnected: ${reason}`);
     
-    // Update last seen
-    const lastSeen = readJSON(LAST_SEEN_FILE);
-    lastSeen[username] = Date.now();
-    writeJSON(LAST_SEEN_FILE, lastSeen);
-    
-    // Remove from active users
-    activeUsers.delete(username);
-    
-    // Broadcast offline status
-    socket.broadcast.emit('user:status', {
-      username: username,
-      status: 'offline',
-      lastSeen: Date.now()
-    });
+    try {
+      // Update last seen
+      const lastSeen = readJSON(LAST_SEEN_FILE);
+      lastSeen[username] = Date.now();
+      writeJSON(LAST_SEEN_FILE, lastSeen);
+      
+      // Remove from tracking maps
+      activeUsers.delete(username);
+      userSockets.delete(username);
+      
+      // Broadcast offline status
+      socket.broadcast.emit('user:status', {
+        username: username,
+        status: 'offline',
+        lastSeen: Date.now()
+      });
+    } catch (error) {
+      console.error('❌ Disconnect handling error:', error);
+    }
   });
 
   // Handle connection errors
   socket.on('error', (error) => {
-    console.error(`Socket error for ${username}:`, error);
+    console.error(`❌ Socket error for ${username}:`, error);
+  });
+
+  // Handle reconnection
+  socket.on('reconnect', () => {
+    console.log(`🔄 User ${username} reconnected`);
+    
+    // Update user tracking
+    userSockets.set(username, socket.id);
+    activeUsers.set(username, {
+      socketId: socket.id,
+      lastSeen: Date.now(),
+      status: 'online'
+    });
+    
+    // Send updated chat list
+    socket.emit('chat:list', getUserChatList(username));
   });
 });
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  const uptime = process.uptime();
+  const memoryUsage = process.memoryUsage();
+  
   res.json({ 
     status: 'OK', 
     timestamp: Date.now(),
     activeUsers: activeUsers.size,
-    uptime: process.uptime()
+    connectedSockets: userSockets.size,
+    uptime: Math.floor(uptime),
+    memory: {
+      used: Math.round(memoryUsage.heapUsed / 1024 / 1024) + ' MB',
+      total: Math.round(memoryUsage.heapTotal / 1024 / 1024) + ' MB'
+    }
   });
+});
+
+// System stats endpoint (for monitoring)
+app.get('/stats', (req, res) => {
+  try {
+    const users = readJSON(USERS_FILE);
+    const messages = readJSON(MESSAGES_FILE);
+    
+    const totalUsers = users.length;
+    const activeUsersCount = activeUsers.size;
+    const totalRooms = Object.keys(messages).length;
+    let totalMessages = 0;
+    
+    Object.values(messages).forEach(roomMessages => {
+      if (Array.isArray(roomMessages)) {
+        totalMessages += roomMessages.length;
+      }
+    });
+    
+    res.json({
+      totalUsers,
+      activeUsersCount,
+      totalRooms,
+      totalMessages,
+      uptime: Math.floor(process.uptime()),
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    console.error('❌ Stats error:', error);
+    res.status(500).json({ error: 'Failed to get stats' });
+  }
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Express error:', err);
+  console.error('❌ Express error:', err);
   
   if (err instanceof multer.MulterError) {
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: 'File too large' });
+      return res.status(400).json({ error: 'File too large (max 50MB)' });
     }
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: 'Unexpected file field' });
+    }
+  }
+  
+  if (err.message && err.message.includes('Only images, videos, and audio files are allowed')) {
+    return res.status(400).json({ error: 'Invalid file type' });
   }
   
   res.status(500).json({ error: 'Internal server error' });
@@ -557,43 +782,102 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use('*', (req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
-
-// Server startup
-const PORT = process.env.PORT || 80;
-
-server.listen(PORT, () => {
-  console.log('\n🚀 WhatsApp Clone Server Started!');
-  console.log(`📡 Server running on http://localhost:${PORT}`);
-  console.log(`👥 Socket.IO ready for connections`);
-  console.log(`📁 Static files served from ./public`);
-  console.log(`💾 Database files in ./data`);
-  console.log(`📤 File uploads in ./public/uploads`);
-  console.log('\n📋 Available endpoints:');
-  console.log('   GET  / - Frontend app');
-  console.log('   POST /auth/register - User registration');
-  console.log('   POST /auth/login - User login');
-  console.log('   GET  /users/search - Search users');
-  console.log('   GET  /chats - Get user chats');
-  console.log('   POST /upload - File upload');
-  console.log('   GET  /health - Health check');
-  console.log('\n✅ Ready to accept connections!\n');
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received');
-  server.close(() => {
-    console.log('Server closed');
-    process.exit(0);
+  res.status(404).json({ 
+    error: 'Route not found',
+    path: req.originalUrl,
+    method: req.method
   });
 });
 
-process.on('SIGINT', () => {
+// Cleanup function for graceful shutdown
+function cleanup() {
   console.log('\n🛑 Server shutting down...');
+  
+  // Update last seen for all active users
+  try {
+    const lastSeen = readJSON(LAST_SEEN_FILE);
+    const now = Date.now();
+    
+    activeUsers.forEach((user, username) => {
+      lastSeen[username] = now;
+    });
+    
+    writeJSON(LAST_SEEN_FILE, lastSeen);
+    console.log('💾 User last seen data saved');
+  } catch (error) {
+    console.error('❌ Error saving last seen data:', error);
+  }
+  
+  // Close server
   server.close(() => {
     console.log('✅ Server closed gracefully');
     process.exit(0);
   });
+  
+  // Force close after 10 seconds
+  setTimeout(() => {
+    console.log('⚠️ Forcing server shutdown...');
+    process.exit(1);
+  }, 10000);
+}
+
+// Server startup
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || 'localhost';
+
+server.listen(PORT, () => {
+  console.clear();
+  console.log('\n🚀 =============================================');
+  console.log('   WhatsApp Clone Server Started Successfully!');
+  console.log('=============================================');
+  console.log(`📡 Server: http://${HOST}:${PORT}`);
+  console.log(`🌐 Frontend: http://${HOST}:${PORT}`);
+  console.log(`👥 Socket.IO: Ready for real-time connections`);
+  console.log(`📁 Static files: ./public`);
+  console.log(`💾 Database: ./data (JSON files)`);
+  console.log(`📤 Uploads: ./public/uploads`);
+  console.log('\n📋 Available API Endpoints:');
+  console.log('   📄 GET  / - Frontend application');
+  console.log('   🔐 POST /auth/register - User registration');
+  console.log('   🔑 POST /auth/login - User authentication');
+  console.log('   👤 GET  /auth/verify - Token verification');
+  console.log('   👥 GET  /users/search - Search users');
+  console.log('   💬 GET  /chats - Get user chat list');
+  console.log('   📁 POST /upload - File upload endpoint');
+  console.log('   ❤️  GET  /health - Health check');
+  console.log('   📊 GET  /stats - System statistics');
+  console.log('\n🎮 Socket.IO Events:');
+  console.log('   💬 dm:join, dm:message, dm:delete');
+  console.log('   📞 call:offer, call:answer, call:candidate');
+  console.log('   📹 video:offer, video:answer, video:candidate');
+  console.log('   👤 user:status, typing:start, typing:stop');
+  console.log('\n✅ Server ready to accept connections!');
+  console.log('=============================================\n');
 });
+
+// Graceful shutdown handlers
+process.on('SIGTERM', cleanup);
+process.on('SIGINT', cleanup);
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught Exception:', error);
+  cleanup();
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+  cleanup();
+});
+
+// Log memory usage periodically (every 30 minutes)
+if (process.env.NODE_ENV !== 'production') {
+  setInterval(() => {
+    const memoryUsage = process.memoryUsage();
+    console.log(`📊 Memory Usage: ${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`);
+    console.log(`👥 Active Users: ${activeUsers.size}, Connected Sockets: ${userSockets.size}`);
+  }, 30 * 60 * 1000); // 30 minutes
+}
+
+module.exports = { app, server, io };
