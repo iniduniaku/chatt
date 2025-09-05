@@ -821,6 +821,161 @@ function cleanup() {
   }, 10000);
 }
 
+// Tambahkan/update fungsi berikut di server.js
+
+// Helper functions (tambahkan setelah fungsi yang sudah ada)
+const updateUserChatList = (username, otherUser, message) => {
+    const chats = readJSON(getFilePath('chats')) || {};
+    
+    if (!chats[username]) {
+        chats[username] = [];
+    }
+
+    let existingChat = chats[username].find(chat => chat.username === otherUser);
+    
+    if (existingChat) {
+        // Update existing chat
+        existingChat.lastMessage = {
+            text: message.text,
+            from: message.from,
+            timestamp: message.timestamp
+        };
+        
+        // Update unread count (only for recipient)
+        if (message.from !== username) {
+            existingChat.unreadCount = (existingChat.unreadCount || 0) + 1;
+        }
+    } else {
+        // Create new chat entry
+        const newChat = {
+            username: otherUser,
+            lastMessage: {
+                text: message.text,
+                from: message.from,
+                timestamp: message.timestamp
+            },
+            unreadCount: message.from !== username ? 1 : 0,
+            status: getUserStatus(otherUser)
+        };
+        
+        chats[username].push(newChat);
+    }
+
+    // Sort by last message timestamp (newest first)
+    chats[username].sort((a, b) => {
+        const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp) : new Date(0);
+        const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp) : new Date(0);
+        return timeB - timeA;
+    });
+
+    writeJSON(getFilePath('chats'), chats);
+};
+
+const broadcastChatList = (username) => {
+    const userSocket = connectedUsers.get(username);
+    if (userSocket) {
+        const chats = getUserChats(username);
+        userSocket.emit('chat:list', chats);
+    }
+};
+
+const clearUnreadCount = (username, otherUser) => {
+    const chats = readJSON(getFilePath('chats')) || {};
+    
+    if (chats[username]) {
+        const chat = chats[username].find(c => c.username === otherUser);
+        if (chat) {
+            chat.unreadCount = 0;
+            writeJSON(getFilePath('chats'), chats);
+        }
+    }
+};
+
+// Update socket event untuk dm:message
+socket.on('dm:message', async (data, callback) => {
+    try {
+        if (!socket.username) {
+            return callback({ success: false, error: 'Not authenticated' });
+        }
+
+        if (!data.to || (!data.text && !data.media)) {
+            return callback({ success: false, error: 'Invalid message data' });
+        }
+
+        const message = {
+            id: generateId('msg'),
+            from: socket.username,
+            to: data.to,
+            text: data.text || null,
+            media: data.media || null,
+            timestamp: Date.now(),
+            readBy: []
+        };
+
+        const roomId = [socket.username, data.to].sort().join('-');
+        saveMessage(roomId, message);
+
+        // Send to room (both users if they're in the room)
+        io.to(roomId).emit('dm:message', message);
+
+        // Update chat lists for both users
+        updateUserChatList(socket.username, data.to, message);
+        updateUserChatList(data.to, socket.username, message);
+
+        // Broadcast updated chat lists to both users
+        broadcastChatList(socket.username);
+        broadcastChatList(data.to);
+
+        // Send notification to recipient if not in the same room
+        const recipientSocket = connectedUsers.get(data.to);
+        if (recipientSocket) {
+            recipientSocket.emit('chat:new_message', {
+                from: socket.username,
+                to: data.to,
+                text: message.text,
+                media: message.media,
+                timestamp: message.timestamp
+            });
+        }
+
+        callback({ success: true, messageId: message.id });
+
+        console.log(`💬 Message from ${socket.username} to ${data.to}`);
+
+    } catch (error) {
+        console.error('❌ DM message error:', error);
+        callback({ success: false, error: 'Failed to send message' });
+    }
+});
+
+// Update socket event untuk dm:join
+socket.on('dm:join', (targetUser, callback) => {
+    if (!socket.username) {
+        return callback({ success: false, error: 'Not authenticated' });
+    }
+
+    const roomId = [socket.username, targetUser].sort().join('-');
+    socket.join(roomId);
+
+    // Clear unread count when joining chat
+    clearUnreadCount(socket.username, targetUser);
+    
+    // Get messages
+    const messages = getMessages(roomId);
+    
+    // Broadcast updated chat list to user (to update unread count)
+    broadcastChatList(socket.username);
+
+    callback({ 
+        success: true, 
+        roomId: roomId,
+        messages: messages 
+    });
+
+    console.log(`📥 ${socket.username} joined room: ${roomId}`);
+});
+
+
 // Server startup
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || 'localhost';
