@@ -343,7 +343,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle sending messages - Updated version
+  // Handle sending messages
   socket.on('dm:message', (messageData, callback) => {
     try {
       const { to, text, media } = messageData;
@@ -462,6 +462,90 @@ io.on('connection', (socket) => {
       console.error('❌ Delete message error:', error);
       if (callback) {
         callback({ success: false, error: 'Failed to delete message' });
+      }
+    }
+  });
+
+  // Handle clearing chat history
+  socket.on('chat:clear', (data, callback) => {
+    try {
+      const { otherUser } = data;
+      const roomId = getRoomId(username, otherUser);
+      
+      // Clear messages
+      const messages = readJSON(getFilePath('messages'));
+      if (messages[roomId]) {
+        delete messages[roomId];
+        writeJSON(getFilePath('messages'), messages);
+      }
+      
+      // Remove from chat list
+      const chats = readJSON(getFilePath('chats'));
+      if (chats[username]) {
+        chats[username] = chats[username].filter(chat => chat.username !== otherUser);
+        writeJSON(getFilePath('chats'), chats);
+      }
+      
+      // Broadcast updated chat list
+      broadcastChatList(username);
+      
+      // Notify the other user if online
+      const otherSocketId = userSockets.get(otherUser);
+      if (otherSocketId) {
+        io.to(otherSocketId).emit('chat:cleared', {
+          by: username,
+          roomId: roomId
+        });
+      }
+      
+      console.log(`🗑️ Chat cleared between ${username} and ${otherUser}`);
+      
+      if (callback) {
+        callback({ success: true });
+      }
+    } catch (error) {
+      console.error('❌ Clear chat error:', error);
+      if (callback) {
+        callback({ success: false, error: 'Failed to clear chat' });
+      }
+    }
+  });
+
+  // Handle clearing all chats
+  socket.on('chats:clear_all', (callback) => {
+    try {
+      // Get user's chats
+      const chats = readJSON(getFilePath('chats'));
+      const userChats = chats[username] || [];
+      
+      // Clear all message rooms for this user
+      const messages = readJSON(getFilePath('messages'));
+      userChats.forEach(chat => {
+        const roomId = getRoomId(username, chat.username);
+        if (messages[roomId]) {
+          delete messages[roomId];
+        }
+      });
+      writeJSON(getFilePath('messages'), messages);
+      
+      // Clear user's chat list
+      if (chats[username]) {
+        chats[username] = [];
+        writeJSON(getFilePath('chats'), chats);
+      }
+      
+      // Broadcast updated chat list
+      broadcastChatList(username);
+      
+      console.log(`🗑️ All chats cleared for ${username}`);
+      
+      if (callback) {
+        callback({ success: true });
+      }
+    } catch (error) {
+      console.error('❌ Clear all chats error:', error);
+      if (callback) {
+        callback({ success: false, error: 'Failed to clear all chats' });
       }
     }
   });
@@ -592,6 +676,84 @@ app.get('/chats', authMiddleware, (req, res) => {
   } catch (error) {
     console.error('❌ Get chats error:', error);
     res.status(500).json({ error: 'Failed to get chats' });
+  }
+});
+
+// Clear chat history endpoint
+app.delete('/chats/:username', authMiddleware, (req, res) => {
+  try {
+    const currentUser = req.user.username;
+    const otherUser = req.params.username;
+    
+    // Clear messages from messages.json
+    const messages = readJSON(getFilePath('messages'));
+    const roomId = getRoomId(currentUser, otherUser);
+    
+    if (messages[roomId]) {
+      delete messages[roomId];
+      writeJSON(getFilePath('messages'), messages);
+    }
+    
+    // Remove from chat list
+    const chats = readJSON(getFilePath('chats'));
+    if (chats[currentUser]) {
+      chats[currentUser] = chats[currentUser].filter(chat => chat.username !== otherUser);
+      writeJSON(getFilePath('chats'), chats);
+    }
+    
+    // Broadcast updated chat list
+    broadcastChatList(currentUser);
+    
+    // Notify the other user if online
+    const otherSocketId = userSockets.get(otherUser);
+    if (otherSocketId) {
+      io.to(otherSocketId).emit('chat:cleared', {
+        by: currentUser,
+        roomId: roomId
+      });
+    }
+    
+    console.log(`🗑️ Chat history cleared between ${currentUser} and ${otherUser}`);
+    res.json({ success: true, message: 'Chat history cleared' });
+  } catch (error) {
+    console.error('❌ Clear chat history error:', error);
+    res.status(500).json({ error: 'Failed to clear chat history' });
+  }
+});
+
+// Clear all chats endpoint
+app.delete('/chats', authMiddleware, (req, res) => {
+  try {
+    const currentUser = req.user.username;
+    
+    // Get user's chats
+    const chats = readJSON(getFilePath('chats'));
+    const userChats = chats[currentUser] || [];
+    
+    // Clear all message rooms for this user
+    const messages = readJSON(getFilePath('messages'));
+    userChats.forEach(chat => {
+      const roomId = getRoomId(currentUser, chat.username);
+      if (messages[roomId]) {
+        delete messages[roomId];
+      }
+    });
+    writeJSON(getFilePath('messages'), messages);
+    
+    // Clear user's chat list
+    if (chats[currentUser]) {
+      chats[currentUser] = [];
+      writeJSON(getFilePath('chats'), chats);
+    }
+    
+    // Broadcast updated chat list
+    broadcastChatList(currentUser);
+    
+    console.log(`🗑️ All chat history cleared for ${currentUser}`);
+    res.json({ success: true, message: 'All chat history cleared' });
+  } catch (error) {
+    console.error('❌ Clear all chats error:', error);
+    res.status(500).json({ error: 'Failed to clear all chats' });
   }
 });
 
