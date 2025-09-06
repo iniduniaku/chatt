@@ -1,324 +1,214 @@
 const express = require('express');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const { readJSON, writeJSON, getFilePath } = require('../utils/fileDB');
+const { readJSON, writeJSON, getFilePath, generateId } = require('../utils/fileDB');
+const { validateUsername, validatePassword } = require('../utils/validation');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
-const USERS_FILE = getFilePath('users');
-
-// Input validation middleware
-const validateUserInput = (req, res, next) => {
-  const { username, password } = req.body;
-  
-  if (!username || !password) {
-    return res.status(400).json({ 
-      message: 'Username and password are required' 
-    });
-  }
-  
-  if (username.length < 3) {
-    return res.status(400).json({ 
-      message: 'Username must be at least 3 characters long' 
-    });
-  }
-  
-  if (password.length < 6) {
-    return res.status(400).json({ 
-      message: 'Password must be at least 6 characters long' 
-    });
-  }
-  
-  // Check for valid username (alphanumeric and underscore only)
-  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-    return res.status(400).json({ 
-      message: 'Username can only contain letters, numbers, and underscores' 
-    });
-  }
-  
-  next();
-};
 
 // Register endpoint
-router.post('/register', validateUserInput, async (req, res) => {
-  try {
-    const { username, password } = req.body;
+router.post('/register', async (req, res) => {
+    try {
+        const { username, password } = req.body;
 
-    console.log(`📝 Registration attempt for username: ${username}`);
+        // Validate input
+        const usernameValidation = validateUsername(username);
+        if (!usernameValidation.isValid) {
+            return res.status(400).json({
+                success: false,
+                error: usernameValidation.errors[0]
+            });
+        }
 
-    const users = readJSON(USERS_FILE);
-    
-    // Check if user already exists
-    const existingUser = users.find(user => 
-      user.username.toLowerCase() === username.toLowerCase()
-    );
-    
-    if (existingUser) {
-      console.log(`❌ Registration failed: Username ${username} already exists`);
-      return res.status(400).json({ 
-        message: 'Username already exists' 
-      });
+        const passwordValidation = validatePassword(password);
+        if (!passwordValidation.isValid) {
+            return res.status(400).json({
+                success: false,
+                error: passwordValidation.errors[0]
+            });
+        }
+
+        // Check if username already exists
+        const users = readJSON(getFilePath('users')) || [];
+        const existingUser = users.find(user => 
+            user.username.toLowerCase() === username.toLowerCase()
+        );
+
+        if (existingUser) {
+            return res.status(409).json({
+                success: false,
+                error: 'Username already exists'
+            });
+        }
+
+        // Hash password
+        const saltRounds = 12;
+        const hashedPassword = await bcrypt.hash(password, saltRounds);
+
+        // Create user
+        const newUser = {
+            id: generateId('user'),
+            username: username.trim(),
+            password: hashedPassword,
+            createdAt: Date.now(),
+            lastLogin: null,
+            isActive: true
+        };
+
+        users.push(newUser);
+        writeJSON(getFilePath('users'), users);
+
+        console.log(`✅ New user registered: ${username}`);
+
+        res.status(201).json({
+            success: true,
+            message: 'User registered successfully',
+            user: {
+                id: newUser.id,
+                username: newUser.username,
+                createdAt: newUser.createdAt
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Registration error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error'
+        });
     }
-
-    // Hash password
-    const saltRounds = 12;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-    
-    // Create new user
-    const newUser = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      username: username,
-      password: hashedPassword,
-      createdAt: Date.now(),
-      lastLogin: null,
-      isActive: true
-    };
-
-    users.push(newUser);
-    writeJSON(USERS_FILE, users);
-
-    console.log(`✅ User registered successfully: ${username}`);
-    
-    res.status(201).json({ 
-      message: 'User registered successfully',
-      user: {
-        id: newUser.id,
-        username: newUser.username,
-        createdAt: newUser.createdAt
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Registration error:', error);
-    res.status(500).json({ 
-      message: 'Internal server error during registration' 
-    });
-  }
 });
 
 // Login endpoint
-router.post('/login', validateUserInput, async (req, res) => {
-  try {
-    const { username, password } = req.body;
+router.post('/login', async (req, res) => {
+    try {
+        const { username, password } = req.body;
 
-    console.log(`🔐 Login attempt for username: ${username}`);
+        if (!username || !password) {
+            return res.status(400).json({
+                success: false,
+                error: 'Username and password are required'
+            });
+        }
 
-    const users = readJSON(USERS_FILE);
-    
-    // Find user (case insensitive)
-    const user = users.find(u => 
-      u.username.toLowerCase() === username.toLowerCase()
-    );
+        // Find user
+        const users = readJSON(getFilePath('users')) || [];
+        const user = users.find(u => 
+            u.username.toLowerCase() === username.toLowerCase() && u.isActive !== false
+        );
 
-    if (!user) {
-      console.log(`❌ Login failed: User ${username} not found`);
-      return res.status(401).json({ 
-        message: 'Invalid username or password' 
-      });
+        if (!user) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid username or password'
+            });
+        }
+
+        // Verify password
+        const isValidPassword = await bcrypt.compare(password, user.password);
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid username or password'
+            });
+        }
+
+        // Update last login
+        user.lastLogin = Date.now();
+        writeJSON(getFilePath('users'), users);
+
+        // Generate JWT token
+        const token = jwt.sign(
+            { 
+                userId: user.id, 
+                username: user.username 
+            },
+            JWT_SECRET,
+            { expiresIn: '7d' }
+        );
+
+        console.log(`✅ User logged in: ${user.username}`);
+
+        res.json({
+            success: true,
+            message: 'Login successful',
+            token: token,
+            user: {
+                id: user.id,
+                username: user.username,
+                createdAt: user.createdAt,
+                lastLogin: user.lastLogin
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Login error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error'
+        });
     }
-
-    // Check if user is active
-    if (!user.isActive) {
-      console.log(`❌ Login failed: User ${username} is deactivated`);
-      return res.status(401).json({ 
-        message: 'Account is deactivated' 
-      });
-    }
-
-    // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
-    
-    if (!isValidPassword) {
-      console.log(`❌ Login failed: Invalid password for ${username}`);
-      return res.status(401).json({ 
-        message: 'Invalid username or password' 
-      });
-    }
-
-    // Update last login
-    const userIndex = users.findIndex(u => u.id === user.id);
-    if (userIndex !== -1) {
-      users[userIndex].lastLogin = Date.now();
-      writeJSON(USERS_FILE, users);
-    }
-
-    // Generate JWT token
-    const tokenPayload = {
-      id: user.id,
-      username: user.username
-    };
-    
-    const token = jwt.sign(
-      tokenPayload,
-      JWT_SECRET,
-      { 
-        expiresIn: '7d',
-        issuer: 'whatsapp-clone',
-        audience: 'whatsapp-clone-users'
-      }
-    );
-
-    console.log(`✅ Login successful for: ${username}`);
-
-    res.json({
-      message: 'Login successful',
-      token: token,
-      user: {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt,
-        lastLogin: users[userIndex].lastLogin
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Login error:', error);
-    res.status(500).json({ 
-      message: 'Internal server error during login' 
-    });
-  }
 });
 
 // Verify token endpoint
-router.get('/verify', (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader) {
-      return res.status(401).json({ message: 'No token provided' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ message: 'Invalid token format' });
-    }
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-    
-    // Check if user still exists
-    const users = readJSON(USERS_FILE);
-    const user = users.find(u => u.id === decoded.id);
-    
-    if (!user || !user.isActive) {
-      return res.status(401).json({ message: 'User not found or inactive' });
-    }
-
-    res.json({
-      valid: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt
-      }
-    });
-
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ message: 'Token expired' });
-    }
-    
-    console.error('❌ Token verification error:', error);
-    res.status(401).json({ message: 'Invalid token' });
-  }
-});
-
-// Get user profile endpoint
-router.get('/profile', require('../utils/jwtMiddleware'), (req, res) => {
-  try {
-    const users = readJSON(USERS_FILE);
-    const user = users.find(u => u.id === req.user.id);
-    
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt,
-        lastLogin: user.lastLogin
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Get profile error:', error);
-    res.status(500).json({ message: 'Failed to get profile' });
-  }
-});
-
-// Update password endpoint
-router.put('/password', require('../utils/jwtMiddleware'), async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ 
-        message: 'Current password and new password are required' 
-      });
-    }
-    
-    if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        message: 'New password must be at least 6 characters long' 
-      });
-    }
-
-    const users = readJSON(USERS_FILE);
-    const userIndex = users.findIndex(u => u.id === req.user.id);
-    
-    if (userIndex === -1) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    const user = users[userIndex];
-    
-    // Verify current password
-    const isValidPassword = await bcrypt.compare(currentPassword, user.password);
-    
-    if (!isValidPassword) {
-      return res.status(401).json({ message: 'Current password is incorrect' });
-    }
-
-    // Hash new password
-    const hashedNewPassword = await bcrypt.hash(newPassword, 12);
-    
-    // Update password
-    users[userIndex].password = hashedNewPassword;
-    users[userIndex].passwordUpdatedAt = Date.now();
-    
-    writeJSON(USERS_FILE, users);
-
-    console.log(`✅ Password updated for user: ${user.username}`);
-
-    res.json({ message: 'Password updated successfully' });
-    
-  } catch (error) {
-    console.error('❌ Update password error:', error);
-    res.status(500).json({ message: 'Failed to update password' });
-  }
-});
-
-// Get all users endpoint (for admin/debugging - REMOVE IN PRODUCTION)
-if (process.env.NODE_ENV !== 'production') {
-  router.get('/users', require('../utils/jwtMiddleware'), (req, res) => {
+router.post('/verify', (req, res) => {
     try {
-      const users = readJSON(USERS_FILE);
-      const safeUsers = users.map(user => ({
-        id: user.id,
-        username: user.username,
-        createdAt: user.createdAt,
-        lastLogin: user.lastLogin,
-        isActive: user.isActive
-      }));
-      
-      res.json({ users: safeUsers });
+        const { token } = req.body;
+
+        if (!token) {
+            return res.status(400).json({
+                success: false,
+                error: 'Token is required'
+            });
+        }
+
+        // Verify token
+        const decoded = jwt.verify(token, JWT_SECRET);
+
+        // Get user data
+        const users = readJSON(getFilePath('users')) || [];
+        const user = users.find(u => u.id === decoded.userId);
+
+        if (!user || user.isActive === false) {
+            return res.status(404).json({
+                success: false,
+                error: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            message: 'Token is valid',
+            user: {
+                id: user.id,
+                username: user.username,
+                createdAt: user.createdAt,
+                lastLogin: user.lastLogin
+            }
+        });
+
     } catch (error) {
-      console.error('❌ Get users error:', error);
-      res.status(500).json({ message: 'Failed to get users' });
+        if (error.name === 'JsonWebTokenError') {
+            return res.status(401).json({
+                success: false,
+                error: 'Invalid token'
+            });
+        }
+
+        if (error.name === 'TokenExpiredError') {
+            return res.status(401).json({
+                success: false,
+                error: 'Token expired'
+            });
+        }
+
+        console.error('❌ Token verification error:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error'
+        });
     }
-  });
-}
+});
 
 module.exports = router;
