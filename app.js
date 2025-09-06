@@ -1,12 +1,12 @@
 const express = require('express');
-const http = require('http');
+const http = require('server');
 const { Server } = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
 const jwt = require('jsonwebtoken');
 const cors = require('cors');
-const { readJSON, writeJSON, getFilePath } = require('./utils/fileDB');
+const { readJSON, writeJSON, getFilePath, generateId } = require('./utils/fileDB');
 const authMiddleware = require('./utils/jwtMiddleware');
 
 const app = express();
@@ -32,31 +32,19 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
-// File paths
-const USERS_FILE = getFilePath('users');
-const MESSAGES_FILE = getFilePath('messages');
-const LAST_SEEN_FILE = getFilePath('last_seen');
-const CHAT_ROOMS_FILE = getFilePath('chat_rooms');
+// File paths dan konstanta
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret';
 
 // Initialize JSON files
 console.log('🚀 Initializing database files...');
-if (!fs.existsSync(USERS_FILE)) {
-  writeJSON(USERS_FILE, []);
-  console.log('✅ Users file created');
-}
-if (!fs.existsSync(MESSAGES_FILE)) {
-  writeJSON(MESSAGES_FILE, {});
-  console.log('✅ Messages file created');
-}
-if (!fs.existsSync(LAST_SEEN_FILE)) {
-  writeJSON(LAST_SEEN_FILE, {});
-  console.log('✅ Last seen file created');
-}
-if (!fs.existsSync(CHAT_ROOMS_FILE)) {
-  writeJSON(CHAT_ROOMS_FILE, {});
-  console.log('✅ Chat rooms file created');
-}
+['users', 'messages', 'last_seen', 'chats'].forEach(type => {
+  const filePath = getFilePath(type);
+  if (!fs.existsSync(filePath)) {
+    const initialData = type === 'users' ? [] : {};
+    writeJSON(filePath, initialData);
+    console.log(`✅ ${type} file created`);
+  }
+});
 
 // Multer setup for file uploads
 const storage = multer.diskStorage({
@@ -75,7 +63,6 @@ const storage = multer.diskStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  // Allow images, videos, and audio files
   const allowedTypes = /jpeg|jpg|png|gif|mp4|mov|avi|mp3|wav|ogg|webm/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
   const mimetype = allowedTypes.test(file.mimetype);
@@ -130,7 +117,7 @@ app.get('/users/search', authMiddleware, (req, res) => {
       return res.json([]);
     }
 
-    const users = readJSON(USERS_FILE);
+    const users = readJSON(getFilePath('users'));
     const results = users
       .filter(user => 
         user.username.toLowerCase().includes(query) && 
@@ -141,7 +128,7 @@ app.get('/users/search', authMiddleware, (req, res) => {
         id: user.id,
         username: user.username
       }))
-      .slice(0, 10); // Limit results
+      .slice(0, 10);
 
     res.json(results);
   } catch (error) {
@@ -150,17 +137,120 @@ app.get('/users/search', authMiddleware, (req, res) => {
   }
 });
 
-// Get user's chat list
-app.get('/chats', authMiddleware, (req, res) => {
-  try {
-    const username = req.user.username;
-    const chatList = getUserChatList(username);
-    res.json(chatList);
-  } catch (error) {
-    console.error('❌ Get chats error:', error);
-    res.status(500).json({ error: 'Failed to get chats' });
+// Active users dan socket tracking
+const activeUsers = new Map();
+const userSockets = new Map();
+
+// Utility functions
+function getRoomId(user1, user2) {
+  const sortedUsers = [user1, user2].sort();
+  return `dm:${sortedUsers.join('::')}`;
+}
+
+function getUserStatus(username) {
+  return activeUsers.has(username) ? 'online' : 'offline';
+}
+
+function saveMessage(roomId, message) {
+  const messages = readJSON(getFilePath('messages')) || {};
+  if (!messages[roomId]) {
+    messages[roomId] = [];
   }
-});
+  messages[roomId].push(message);
+  writeJSON(getFilePath('messages'), messages);
+}
+
+function getMessages(roomId, limit = 50) {
+  const messages = readJSON(getFilePath('messages')) || {};
+  const roomMessages = messages[roomId] || [];
+  return roomMessages.slice(-limit);
+}
+
+function getUserChatList(username) {
+  try {
+    const chats = readJSON(getFilePath('chats')) || {};
+    const userChats = chats[username] || [];
+    
+    // Update status for each chat
+    return userChats.map(chat => ({
+      ...chat,
+      status: getUserStatus(chat.username),
+      lastSeen: getLastSeen(chat.username)
+    }));
+  } catch (error) {
+    console.error('❌ Get user chat list error:', error);
+    return [];
+  }
+}
+
+function getLastSeen(username) {
+  const lastSeen = readJSON(getFilePath('last_seen')) || {};
+  return lastSeen[username] || null;
+}
+
+function updateUserChatList(username, otherUser, message) {
+  const chats = readJSON(getFilePath('chats')) || {};
+  
+  if (!chats[username]) {
+    chats[username] = [];
+  }
+
+  let existingChat = chats[username].find(chat => chat.username === otherUser);
+  
+  if (existingChat) {
+    existingChat.lastMessage = {
+      text: message.text,
+      from: message.from,
+      timestamp: message.timestamp
+    };
+    
+    if (message.from !== username) {
+      existingChat.unreadCount = (existingChat.unreadCount || 0) + 1;
+    }
+  } else {
+    const newChat = {
+      username: otherUser,
+      lastMessage: {
+        text: message.text,
+        from: message.from,
+        timestamp: message.timestamp
+      },
+      unreadCount: message.from !== username ? 1 : 0,
+      status: getUserStatus(otherUser)
+    };
+    
+    chats[username].push(newChat);
+  }
+
+  // Sort by last message timestamp
+  chats[username].sort((a, b) => {
+    const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp) : new Date(0);
+    const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp) : new Date(0);
+    return timeB - timeA;
+  });
+
+  writeJSON(getFilePath('chats'), chats);
+}
+
+function broadcastChatList(username) {
+  const userSocketId = userSockets.get(username);
+  if (userSocketId) {
+    const chats = getUserChatList(username);
+    io.to(userSocketId).emit('chat:list', chats);
+  }
+}
+
+function clearUnreadCount(username, otherUser) {
+  const chats = readJSON(getFilePath('chats')) || {};
+  
+  if (chats[username]) {
+    const chat = chats[username].find(c => c.username === otherUser);
+    if (chat) {
+      chat.unreadCount = 0;
+      writeJSON(getFilePath('chats'), chats);
+    }
+  }
+}
 
 // Socket.IO authentication middleware
 io.use((socket, next) => {
@@ -179,72 +269,6 @@ io.use((socket, next) => {
     next(new Error('Invalid token'));
   }
 });
-
-// Utility function to generate room ID
-function getRoomId(user1, user2) {
-  const sortedUsers = [user1, user2].sort();
-  return `dm:${sortedUsers.join('::')}`;
-}
-
-// Function to get user's chat list
-function getUserChatList(username) {
-  try {
-    const messages = readJSON(MESSAGES_FILE);
-    const lastSeen = readJSON(LAST_SEEN_FILE);
-    
-    const chatList = [];
-    
-    // Find all rooms user is part of
-    Object.keys(messages).forEach(roomId => {
-      if (roomId.includes(username)) {
-        const roomMessages = messages[roomId];
-        if (roomMessages && roomMessages.length > 0) {
-          // Filter messages not deleted for this user
-          const visibleMessages = roomMessages.filter(msg => 
-            !msg.deletedFor || !msg.deletedFor.includes(username)
-          );
-          
-          if (visibleMessages.length > 0) {
-            const lastMessage = visibleMessages[visibleMessages.length - 1];
-            const otherUser = roomId.replace('dm:', '').split('::').find(u => u !== username);
-            
-            if (otherUser) {
-              // Count unread messages
-              const unreadCount = visibleMessages.filter(msg => 
-                msg.from !== username && (!msg.readBy || !msg.readBy.includes(username))
-              ).length;
-
-              chatList.push({
-                username: otherUser,
-                lastMessage: {
-                  text: lastMessage.text || 'Media',
-                  timestamp: lastMessage.timestamp,
-                  from: lastMessage.from
-                },
-                unreadCount: unreadCount,
-                roomId: roomId,
-                lastSeen: lastSeen[otherUser] || null,
-                status: activeUsers.has(otherUser) ? 'online' : 'offline'
-              });
-            }
-          }
-        }
-      }
-    });
-    
-    // Sort by last message timestamp
-    chatList.sort((a, b) => b.lastMessage.timestamp - a.lastMessage.timestamp);
-    
-    return chatList;
-  } catch (error) {
-    console.error('❌ Get user chat list error:', error);
-    return [];
-  }
-}
-
-// Active users and socket tracking
-const activeUsers = new Map();
-const userSockets = new Map();
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
@@ -293,13 +317,14 @@ io.on('connection', (socket) => {
       const roomId = getRoomId(username, otherUser);
       socket.join(roomId);
       
-      const messages = readJSON(MESSAGES_FILE);
-      const roomMessages = messages[roomId] || [];
+      // Clear unread count when joining chat
+      clearUnreadCount(username, otherUser);
       
-      // Filter out deleted messages for this user
-      const filteredMessages = roomMessages.filter(msg => 
-        !msg.deletedFor || !msg.deletedFor.includes(username)
-      );
+      // Get messages
+      const messages = getMessages(roomId);
+      
+      // Broadcast updated chat list to user (to update unread count)
+      broadcastChatList(username);
       
       console.log(`📨 ${username} joined room: ${roomId}`);
       
@@ -307,7 +332,7 @@ io.on('connection', (socket) => {
         callback({ 
           success: true,
           roomId: roomId, 
-          messages: filteredMessages 
+          messages: messages 
         });
       }
     } catch (error) {
@@ -318,7 +343,7 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle sending messages
+  // Handle sending messages - Updated version
   socket.on('dm:message', (messageData, callback) => {
     try {
       const { to, text, media } = messageData;
@@ -329,14 +354,9 @@ io.on('connection', (socket) => {
       }
 
       const roomId = getRoomId(username, to);
-      const messages = readJSON(MESSAGES_FILE);
       
-      if (!messages[roomId]) {
-        messages[roomId] = [];
-      }
-
       const message = {
-        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
+        id: generateId('msg'),
         from: username,
         to: to,
         text: text || '',
@@ -346,33 +366,36 @@ io.on('connection', (socket) => {
         deletedFor: []
       };
 
-      messages[roomId].push(message);
-      writeJSON(MESSAGES_FILE, messages);
+      // Save message
+      saveMessage(roomId, message);
 
-      // Emit to all users in the room (including sender)
+      // Emit to all users in the room
       io.to(roomId).emit('dm:message', message);
 
-      // Notify recipient even if they're not in the chat room
+      // Update chat lists for both users
+      updateUserChatList(username, to, message);
+      updateUserChatList(to, username, message);
+
+      // Broadcast updated chat lists
+      broadcastChatList(username);
+      broadcastChatList(to);
+
+      // Send notification to recipient
       const recipientSocketId = userSockets.get(to);
       if (recipientSocketId) {
-        // Send new message notification
         io.to(recipientSocketId).emit('chat:new_message', {
           from: username,
-          message: message,
-          roomId: roomId
+          to: to,
+          text: message.text,
+          media: message.media,
+          timestamp: message.timestamp
         });
-
-        // Update recipient's chat list
-        io.to(recipientSocketId).emit('chat:list', getUserChatList(to));
       }
-
-      // Update sender's chat list too
-      socket.emit('chat:list', getUserChatList(username));
 
       console.log(`💬 Message sent from ${username} to ${to}`);
       
       if (callback) {
-        callback({ success: true, message });
+        callback({ success: true, messageId: message.id });
       }
     } catch (error) {
       console.error('❌ Send message error:', error);
@@ -386,7 +409,7 @@ io.on('connection', (socket) => {
   socket.on('dm:delete', (deleteData, callback) => {
     try {
       const { roomId, messageId, forEveryone } = deleteData;
-      const messages = readJSON(MESSAGES_FILE);
+      const messages = readJSON(getFilePath('messages'));
       
       if (!messages[roomId]) {
         if (callback) callback({ success: false, error: 'Room not found' });
@@ -394,18 +417,14 @@ io.on('connection', (socket) => {
       }
 
       let messageFound = false;
-      let messageIndex = -1;
 
       messages[roomId].forEach((msg, index) => {
         if (msg.id === messageId) {
           messageFound = true;
-          messageIndex = index;
           
           if (forEveryone && msg.from === username) {
-            // Delete for everyone - remove the message completely
             messages[roomId].splice(index, 1);
           } else {
-            // Delete for me only
             if (!msg.deletedFor) msg.deletedFor = [];
             if (!msg.deletedFor.includes(username)) {
               msg.deletedFor.push(username);
@@ -415,22 +434,18 @@ io.on('connection', (socket) => {
       });
 
       if (messageFound) {
-        writeJSON(MESSAGES_FILE, messages);
+        writeJSON(getFilePath('messages'), messages);
         
-        // Notify all users in the room
         io.to(roomId).emit('dm:delete', {
           messageId: messageId,
           by: username,
           forEveryone: forEveryone
         });
 
-        // Update chat lists for both users
+        // Update chat lists
         const roomUsers = roomId.replace('dm:', '').split('::');
         roomUsers.forEach(user => {
-          const userSocketId = userSockets.get(user);
-          if (userSocketId) {
-            io.to(userSocketId).emit('chat:list', getUserChatList(user));
-          }
+          broadcastChatList(user);
         });
 
         console.log(`🗑️ Message ${messageId} deleted by ${username}`);
@@ -455,7 +470,7 @@ io.on('connection', (socket) => {
   socket.on('message:read', (data) => {
     try {
       const { messageId, roomId } = data;
-      const messages = readJSON(MESSAGES_FILE);
+      const messages = readJSON(getFilePath('messages'));
       
       if (messages[roomId]) {
         const message = messages[roomId].find(msg => msg.id === messageId);
@@ -463,9 +478,8 @@ io.on('connection', (socket) => {
           if (!message.readBy) message.readBy = [];
           if (!message.readBy.includes(username)) {
             message.readBy.push(username);
-            writeJSON(MESSAGES_FILE, messages);
+            writeJSON(getFilePath('messages'), messages);
             
-            // Notify sender about read status
             io.to(roomId).emit('message:read', {
               messageId: messageId,
               readBy: username
@@ -483,7 +497,6 @@ io.on('connection', (socket) => {
     try {
       const roomId = getRoomId(username, data.to);
       socket.to(roomId).emit('typing:start', { from: username });
-      console.log(`⌨️ ${username} started typing to ${data.to}`);
     } catch (error) {
       console.error('❌ Typing start error:', error);
     }
@@ -493,148 +506,31 @@ io.on('connection', (socket) => {
     try {
       const roomId = getRoomId(username, data.to);
       socket.to(roomId).emit('typing:stop', { from: username });
-      console.log(`⌨️ ${username} stopped typing to ${data.to}`);
     } catch (error) {
       console.error('❌ Typing stop error:', error);
     }
   });
 
-  // WebRTC signaling for voice calls
-  socket.on('call:offer', (data) => {
-    try {
-      const { to, offer } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('call:offer', {
-          from: username,
-          offer: offer
-        });
-        console.log(`📞 Voice call offer from ${username} to ${to}`);
-      } else {
-        socket.emit('call:error', { error: 'User not online' });
+  // WebRTC Call Events
+  ['call:offer', 'call:answer', 'call:candidate', 'call:end', 
+   'video:offer', 'video:answer', 'video:candidate', 'video:end'].forEach(event => {
+    socket.on(event, (data) => {
+      try {
+        const { to } = data;
+        const recipientSocketId = userSockets.get(to);
+        
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit(event, {
+            from: username,
+            ...data
+          });
+        } else if (event.includes('offer')) {
+          socket.emit(event.replace(':', ':error'), { error: 'User not online' });
+        }
+      } catch (error) {
+        console.error(`❌ ${event} error:`, error);
       }
-    } catch (error) {
-      console.error('❌ Call offer error:', error);
-    }
-  });
-
-  socket.on('call:answer', (data) => {
-    try {
-      const { to, answer } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('call:answer', {
-          from: username,
-          answer: answer
-        });
-        console.log(`📞 Voice call answered by ${username} to ${to}`);
-      }
-    } catch (error) {
-      console.error('❌ Call answer error:', error);
-    }
-  });
-
-  socket.on('call:candidate', (data) => {
-    try {
-      const { to, candidate } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('call:candidate', {
-          from: username,
-          candidate: candidate
-        });
-      }
-    } catch (error) {
-      console.error('❌ Call candidate error:', error);
-    }
-  });
-
-  socket.on('call:end', (data) => {
-    try {
-      const { to } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('call:end', {
-          from: username
-        });
-        console.log(`📞 Call ended by ${username}`);
-      }
-    } catch (error) {
-      console.error('❌ Call end error:', error);
-    }
-  });
-
-  // WebRTC signaling for video calls
-  socket.on('video:offer', (data) => {
-    try {
-      const { to, offer } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('video:offer', {
-          from: username,
-          offer: offer
-        });
-        console.log(`📹 Video call offer from ${username} to ${to}`);
-      } else {
-        socket.emit('video:error', { error: 'User not online' });
-      }
-    } catch (error) {
-      console.error('❌ Video offer error:', error);
-    }
-  });
-
-  socket.on('video:answer', (data) => {
-    try {
-      const { to, answer } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('video:answer', {
-          from: username,
-          answer: answer
-        });
-        console.log(`📹 Video call answered by ${username} to ${to}`);
-      }
-    } catch (error) {
-      console.error('❌ Video answer error:', error);
-    }
-  });
-
-  socket.on('video:candidate', (data) => {
-    try {
-      const { to, candidate } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('video:candidate', {
-          from: username,
-          candidate: candidate
-        });
-      }
-    } catch (error) {
-      console.error('❌ Video candidate error:', error);
-    }
-  });
-
-  socket.on('video:end', (data) => {
-    try {
-      const { to } = data;
-      const recipientSocketId = userSockets.get(to);
-      
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('video:end', {
-          from: username
-        });
-        console.log(`📹 Video call ended by ${username}`);
-      }
-    } catch (error) {
-      console.error('❌ Video end error:', error);
-    }
+    });
   });
 
   // Handle user status updates
@@ -645,21 +541,18 @@ io.on('connection', (socket) => {
         user.status = status;
         user.lastSeen = Date.now();
         
-        // Broadcast status to all connected users
         socket.broadcast.emit('user:status', {
           username: username,
           status: status,
           lastSeen: user.lastSeen
         });
-        
-        console.log(`👤 ${username} status: ${status}`);
       }
     } catch (error) {
       console.error('❌ Status update error:', error);
     }
   });
 
-  // Handle ping/pong for connection health
+  // Handle ping/pong
   socket.on('ping', () => {
     socket.emit('pong');
   });
@@ -670,9 +563,9 @@ io.on('connection', (socket) => {
     
     try {
       // Update last seen
-      const lastSeen = readJSON(LAST_SEEN_FILE);
+      const lastSeen = readJSON(getFilePath('last_seen'));
       lastSeen[username] = Date.now();
-      writeJSON(LAST_SEEN_FILE, lastSeen);
+      writeJSON(getFilePath('last_seen'), lastSeen);
       
       // Remove from tracking maps
       activeUsers.delete(username);
@@ -688,27 +581,18 @@ io.on('connection', (socket) => {
       console.error('❌ Disconnect handling error:', error);
     }
   });
+});
 
-  // Handle connection errors
-  socket.on('error', (error) => {
-    console.error(`❌ Socket error for ${username}:`, error);
-  });
-
-  // Handle reconnection
-  socket.on('reconnect', () => {
-    console.log(`🔄 User ${username} reconnected`);
-    
-    // Update user tracking
-    userSockets.set(username, socket.id);
-    activeUsers.set(username, {
-      socketId: socket.id,
-      lastSeen: Date.now(),
-      status: 'online'
-    });
-    
-    // Send updated chat list
-    socket.emit('chat:list', getUserChatList(username));
-  });
+// Get user's chat list endpoint
+app.get('/chats', authMiddleware, (req, res) => {
+  try {
+    const username = req.user.username;
+    const chatList = getUserChatList(username);
+    res.json(chatList);
+  } catch (error) {
+    console.error('❌ Get chats error:', error);
+    res.status(500).json({ error: 'Failed to get chats' });
+  }
 });
 
 // Health check endpoint
@@ -729,11 +613,11 @@ app.get('/health', (req, res) => {
   });
 });
 
-// System stats endpoint (for monitoring)
+// System stats endpoint
 app.get('/stats', (req, res) => {
   try {
-    const users = readJSON(USERS_FILE);
-    const messages = readJSON(MESSAGES_FILE);
+    const users = readJSON(getFilePath('users'));
+    const messages = readJSON(getFilePath('messages'));
     
     const totalUsers = users.length;
     const activeUsersCount = activeUsers.size;
@@ -789,201 +673,43 @@ app.use('*', (req, res) => {
   });
 });
 
-// Cleanup function for graceful shutdown
+// Cleanup function
 function cleanup() {
   console.log('\n🛑 Server shutting down...');
   
-  // Update last seen for all active users
   try {
-    const lastSeen = readJSON(LAST_SEEN_FILE);
+    const lastSeen = readJSON(getFilePath('last_seen'));
     const now = Date.now();
     
     activeUsers.forEach((user, username) => {
       lastSeen[username] = now;
     });
     
-    writeJSON(LAST_SEEN_FILE, lastSeen);
+    writeJSON(getFilePath('last_seen'), lastSeen);
     console.log('💾 User last seen data saved');
   } catch (error) {
     console.error('❌ Error saving last seen data:', error);
   }
   
-  // Close server
   server.close(() => {
     console.log('✅ Server closed gracefully');
     process.exit(0);
   });
   
-  // Force close after 10 seconds
   setTimeout(() => {
     console.log('⚠️ Forcing server shutdown...');
     process.exit(1);
   }, 10000);
 }
 
-// Tambahkan/update fungsi berikut di server.js
-
-// Helper functions (tambahkan setelah fungsi yang sudah ada)
-const updateUserChatList = (username, otherUser, message) => {
-    const chats = readJSON(getFilePath('chats')) || {};
-    
-    if (!chats[username]) {
-        chats[username] = [];
-    }
-
-    let existingChat = chats[username].find(chat => chat.username === otherUser);
-    
-    if (existingChat) {
-        // Update existing chat
-        existingChat.lastMessage = {
-            text: message.text,
-            from: message.from,
-            timestamp: message.timestamp
-        };
-        
-        // Update unread count (only for recipient)
-        if (message.from !== username) {
-            existingChat.unreadCount = (existingChat.unreadCount || 0) + 1;
-        }
-    } else {
-        // Create new chat entry
-        const newChat = {
-            username: otherUser,
-            lastMessage: {
-                text: message.text,
-                from: message.from,
-                timestamp: message.timestamp
-            },
-            unreadCount: message.from !== username ? 1 : 0,
-            status: getUserStatus(otherUser)
-        };
-        
-        chats[username].push(newChat);
-    }
-
-    // Sort by last message timestamp (newest first)
-    chats[username].sort((a, b) => {
-        const timeA = a.lastMessage ? new Date(a.lastMessage.timestamp) : new Date(0);
-        const timeB = b.lastMessage ? new Date(b.lastMessage.timestamp) : new Date(0);
-        return timeB - timeA;
-    });
-
-    writeJSON(getFilePath('chats'), chats);
-};
-
-const broadcastChatList = (username) => {
-    const userSocket = connectedUsers.get(username);
-    if (userSocket) {
-        const chats = getUserChats(username);
-        userSocket.emit('chat:list', chats);
-    }
-};
-
-const clearUnreadCount = (username, otherUser) => {
-    const chats = readJSON(getFilePath('chats')) || {};
-    
-    if (chats[username]) {
-        const chat = chats[username].find(c => c.username === otherUser);
-        if (chat) {
-            chat.unreadCount = 0;
-            writeJSON(getFilePath('chats'), chats);
-        }
-    }
-};
-
-// Update socket event untuk dm:message
-socket.on('dm:message', async (data, callback) => {
-    try {
-        if (!socket.username) {
-            return callback({ success: false, error: 'Not authenticated' });
-        }
-
-        if (!data.to || (!data.text && !data.media)) {
-            return callback({ success: false, error: 'Invalid message data' });
-        }
-
-        const message = {
-            id: generateId('msg'),
-            from: socket.username,
-            to: data.to,
-            text: data.text || null,
-            media: data.media || null,
-            timestamp: Date.now(),
-            readBy: []
-        };
-
-        const roomId = [socket.username, data.to].sort().join('-');
-        saveMessage(roomId, message);
-
-        // Send to room (both users if they're in the room)
-        io.to(roomId).emit('dm:message', message);
-
-        // Update chat lists for both users
-        updateUserChatList(socket.username, data.to, message);
-        updateUserChatList(data.to, socket.username, message);
-
-        // Broadcast updated chat lists to both users
-        broadcastChatList(socket.username);
-        broadcastChatList(data.to);
-
-        // Send notification to recipient if not in the same room
-        const recipientSocket = connectedUsers.get(data.to);
-        if (recipientSocket) {
-            recipientSocket.emit('chat:new_message', {
-                from: socket.username,
-                to: data.to,
-                text: message.text,
-                media: message.media,
-                timestamp: message.timestamp
-            });
-        }
-
-        callback({ success: true, messageId: message.id });
-
-        console.log(`💬 Message from ${socket.username} to ${data.to}`);
-
-    } catch (error) {
-        console.error('❌ DM message error:', error);
-        callback({ success: false, error: 'Failed to send message' });
-    }
-});
-
-// Update socket event untuk dm:join
-socket.on('dm:join', (targetUser, callback) => {
-    if (!socket.username) {
-        return callback({ success: false, error: 'Not authenticated' });
-    }
-
-    const roomId = [socket.username, targetUser].sort().join('-');
-    socket.join(roomId);
-
-    // Clear unread count when joining chat
-    clearUnreadCount(socket.username, targetUser);
-    
-    // Get messages
-    const messages = getMessages(roomId);
-    
-    // Broadcast updated chat list to user (to update unread count)
-    broadcastChatList(socket.username);
-
-    callback({ 
-        success: true, 
-        roomId: roomId,
-        messages: messages 
-    });
-
-    console.log(`📥 ${socket.username} joined room: ${roomId}`);
-});
-
-
 // Server startup
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 80;
 const HOST = process.env.HOST || 'localhost';
 
 server.listen(PORT, () => {
   console.clear();
   console.log('\n🚀 =============================================');
-  console.log('   WhatsApp Clone Server Started Successfully!');
+  console.log('   ChatVibe Server Started Successfully!');
   console.log('=============================================');
   console.log(`📡 Server: http://${HOST}:${PORT}`);
   console.log(`🌐 Frontend: http://${HOST}:${PORT}`);
@@ -991,21 +717,6 @@ server.listen(PORT, () => {
   console.log(`📁 Static files: ./public`);
   console.log(`💾 Database: ./data (JSON files)`);
   console.log(`📤 Uploads: ./public/uploads`);
-  console.log('\n📋 Available API Endpoints:');
-  console.log('   📄 GET  / - Frontend application');
-  console.log('   🔐 POST /auth/register - User registration');
-  console.log('   🔑 POST /auth/login - User authentication');
-  console.log('   👤 GET  /auth/verify - Token verification');
-  console.log('   👥 GET  /users/search - Search users');
-  console.log('   💬 GET  /chats - Get user chat list');
-  console.log('   📁 POST /upload - File upload endpoint');
-  console.log('   ❤️  GET  /health - Health check');
-  console.log('   📊 GET  /stats - System statistics');
-  console.log('\n🎮 Socket.IO Events:');
-  console.log('   💬 dm:join, dm:message, dm:delete');
-  console.log('   📞 call:offer, call:answer, call:candidate');
-  console.log('   📹 video:offer, video:answer, video:candidate');
-  console.log('   👤 user:status, typing:start, typing:stop');
   console.log('\n✅ Server ready to accept connections!');
   console.log('=============================================\n');
 });
@@ -1013,26 +724,13 @@ server.listen(PORT, () => {
 // Graceful shutdown handlers
 process.on('SIGTERM', cleanup);
 process.on('SIGINT', cleanup);
-
-// Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
   console.error('❌ Uncaught Exception:', error);
   cleanup();
 });
-
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
   cleanup();
 });
-
-// Log memory usage periodically (every 30 minutes)
-if (process.env.NODE_ENV !== 'production') {
-  setInterval(() => {
-    const memoryUsage = process.memoryUsage();
-    console.log(`📊 Memory Usage: ${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB / ${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`);
-    console.log(`👥 Active Users: ${activeUsers.size}, Connected Sockets: ${userSockets.size}`);
-  }, 30 * 60 * 1000); // 30 minutes
-}
 
 module.exports = { app, server, io };
