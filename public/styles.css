@@ -2193,3 +2193,337 @@ input:checked + .slider:before {
     transition: all var(--transition-slow);
    }
     
+/* =====================================
+   ENHANCED CHAT ITEM STYLES
+===================================== */
+.chat-item {
+    position: relative;
+    overflow: hidden;
+}
+
+.chat-item.new-message {
+    background: rgba(102, 126, 234, 0.05);
+    animation: highlightNewMessage 2s ease;
+}
+
+@keyframes highlightNewMessage {
+    0% { background: rgba(102, 126, 234, 0.2); }
+    100% { background: transparent; }
+}
+
+.last-message.placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* Sending message state */
+.message.sending .message-bubble {
+    opacity: 0.7;
+    position: relative;
+}
+
+.message.sending .message-bubble::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    right: var(--spacing-sm);
+    transform: translateY(-50%);
+    width: 12px;
+    height: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top: 2px solid white;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+/* Unread message indicator */
+.unread-count {
+    animation: bounceIn 0.3s ease;
+    background: linear-gradient(135deg, var(--primary-color), var(--accent-color));
+    box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
+    position: relative;
+}
+
+@keyframes bounceIn {
+    0% {
+        opacity: 0;
+        transform: scale(0.3);
+    }
+    50% {
+        opacity: 1;
+        transform: scale(1.1);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* New chat item animation */
+@keyframes slideInLeft {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Message read status */
+.message-status.read {
+    color: #4fc3f7;
+    animation: readPulse 0.3s ease;
+}
+
+@keyframes readPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+
+/* Enhanced toast for clickable notifications */
+.toast.clickable {
+    cursor: pointer;
+    transition: transform var(--transition-fast);
+}
+
+.toast.clickable:hover {
+    transform: translateX(-5px);
+    box-shadow: var(--shadow-heavy);
+}
+
+/* Message context menu */
+.message-context-menu {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    box-shadow: var(--shadow-heavy);
+    backdrop-filter: blur(10px);
+    overflow: hidden;
+    animation: contextMenuSlide 0.2s ease;
+}
+
+@keyframes contextMenuSlide {
+    from {
+        opacity: 0;
+        transform: scale(0.9) translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.context-menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    font-size: var(--font-size-sm);
+}
+
+.context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.context-menu-item i {
+    width: 16px;
+    opacity: 0.7;
+}
+
+/* Enhanced connection status */
+.connection-status {
+    backdrop-filter: blur(10px);
+    border-radius: 0 0 var(--border-radius) var(--border-radius);
+}
+
+.connection-status.show {
+    animation: slideInDown 0.3s ease;
+}
+
+/* Loading skeleton for chat items */
+.chat-item-skeleton {
+    padding: var(--spacing-md) var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.skeleton-avatar {
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
+    background: linear-gradient(90deg, 
+        rgba(255, 255, 255, 0.05) 25%, 
+        rgba(255, 255, 255, 0.1) 50%, 
+        rgba(255, 255, 255, 0.05) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+.skeleton-text {
+    flex: 1;
+}
+
+.skeleton-line {
+    height: 12px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, 
+        rgba(255, 255, 255, 0.05) 25%, 
+        rgba(255, 255, 255, 0.1) 50%, 
+        rgba(255, 255, 255, 0.05) 75%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    margin-bottom: var(--spacing-xs);
+}
+
+.skeleton-line.short {
+    width: 60%;
+}
+
+@keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+}
+
+/* Emoji picker enhancements */
+.emoji-picker {
+    animation: slideInUp 0.2s ease;
+}
+
+.emoji-picker::-webkit-scrollbar {
+    width: 6px;
+}
+
+.emoji-picker::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.emoji-picker::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+}
+
+/* Voice recording animation */
+.recording-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    color: var(--text-error);
+    font-size: var(--font-size-sm);
+    animation: pulse 1s infinite;
+}
+
+.recording-dot {
+    width: 8px;
+    height: 8px;
+    background: var(--text-error);
+    border-radius: 50%;
+    animation: recordingPulse 1s infinite;
+}
+
+@keyframes recordingPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* Image modal enhancements */
+.image-modal {
+    animation: fadeIn 0.3s ease;
+}
+
+.image-modal img {
+    animation: imageZoom 0.3s ease;
+}
+
+@keyframes imageZoom {
+    from {
+        opacity: 0;
+        transform: scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Enhanced scroll behavior */
+.messages-container {
+    scroll-behavior: smooth;
+}
+
+/* Better focus states */
+.chat-item:focus-visible,
+.search-result-item:focus-visible {
+    outline: 2px solid var(--primary-color);
+    outline-offset: -2px;
+}
+
+/* Responsive improvements for better mobile experience */
+@media (max-width: 768px) {
+    .toast {
+        margin: 0 var(--spacing-sm);
+        width: auto;
+    }
+    
+    .message-context-menu {
+        max-width: calc(100vw - 2rem);
+    }
+    
+    .emoji-picker {
+        max-width: calc(100vw - 2rem);
+        left: var(--spacing-md) !important;
+        right: var(--spacing-md) !important;
+    }
+    
+    .image-modal > div {
+        max-width: 95% !important;
+        max-height: 95% !important;
+    }
+}
+
+/* Loading states */
+.btn.loading {
+    position: relative;
+    color: transparent !important;
+}
+
+.btn.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top: 2px solid white;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+/* Success animations */
+.success-bounce {
+    animation: successBounce 0.5s ease;
+}
+
+@keyframes successBounce {
+    0%, 20%, 53%, 80%, 100% {
+        transform: translate3d(0, 0, 0);
+    }
+    40%, 43% {
+        transform: translate3d(0, -10px, 0);
+    }
+    70% {
+        transform: translate3d(0, -5px, 0);
+    }
+    90% {
+        transform: translate3d(0, -2px, 0);
+    }
+   }
