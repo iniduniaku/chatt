@@ -166,6 +166,9 @@
                     <button class="action-btn" onclick="showUserSearch()" title="Cari pengguna">
                         <i class="fas fa-user-plus"></i>
                     </button>
+                    <button class="action-btn" onclick="clearAllChats()" title="Hapus semua chat">
+                        <i class="fas fa-trash-alt"></i>
+                    </button>
                     <button class="action-btn" onclick="showSettings()" title="Pengaturan">
                         <i class="fas fa-cog"></i>
                     </button>
@@ -190,6 +193,14 @@
             <div class="chat-list-container">
                 <div id="chatList" class="chat-list">
                     <!-- Chat items will be dynamically loaded -->
+                    <div class="no-chats" style="display: none;">
+                        <i class="fas fa-comments"></i>
+                        <p>Belum ada percakapan</p>
+                        <button class="btn btn-primary" onclick="showUserSearch()">
+                            <i class="fas fa-user-plus"></i>
+                            <span>Mulai Chat</span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </aside>
@@ -205,6 +216,9 @@
                 <div class="mobile-actions">
                     <button class="action-btn" onclick="showUserSearch()">
                         <i class="fas fa-user-plus"></i>
+                    </button>
+                    <button class="action-btn" onclick="clearAllChats()" title="Hapus semua chat">
+                        <i class="fas fa-trash-alt"></i>
                     </button>
                 </div>
             </div>
@@ -247,6 +261,9 @@
                     <button class="action-btn" onclick="startVideoCall()" title="Panggilan video">
                         <i class="fas fa-video"></i>
                     </button>
+                    <button class="action-btn" onclick="clearCurrentChatHistory()" title="Hapus chat">
+                        <i class="fas fa-trash"></i>
+                    </button>
                     <button class="action-btn" onclick="showChatInfo()" title="Info chat">
                         <i class="fas fa-info-circle"></i>
                     </button>
@@ -260,7 +277,7 @@
                 </div>
                 
                 <!-- Typing Indicator -->
-                <div id="typingIndicator" class="typing-indicator">
+                <div id="typingIndicator" class="typing-indicator" style="display: none;">
                     <div class="typing-dots">
                         <span></span>
                         <span></span>
@@ -393,6 +410,17 @@
                 </div>
                 
                 <div class="settings-section">
+                    <h4><i class="fas fa-database"></i> Data</h4>
+                    <button class="btn btn-danger" onclick="clearAllChats()">
+                        <i class="fas fa-trash-alt"></i>
+                        <span>Hapus Semua Chat</span>
+                    </button>
+                    <div class="setting-help">
+                        <small>Menghapus semua riwayat percakapan secara permanen</small>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
                     <h4><i class="fas fa-lock"></i> Keamanan</h4>
                     <button class="btn btn-secondary" onclick="showChangePassword()">
                         <i class="fas fa-key"></i>
@@ -414,6 +442,60 @@
                             </label>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chat Info Modal -->
+    <div id="chatInfoModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-info-circle"></i> Info Chat</h3>
+                <button class="modal-close" onclick="closeModal('chatInfoModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="chat-info-section">
+                    <div class="chat-info-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <h4 id="chatInfoUsername">Username</h4>
+                    <p id="chatInfoStatus" class="chat-info-status">Online</p>
+                </div>
+                
+                <div class="chat-info-actions">
+                    <button class="btn btn-danger" onclick="clearChatHistory()">
+                        <i class="fas fa-trash"></i>
+                        <span>Hapus Chat</span>
+                    </button>
+                    <div class="action-help">
+                        <small>Menghapus semua pesan dalam percakapan ini</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content modal-small">
+            <div class="modal-header">
+                <h3 id="confirmTitle"><i class="fas fa-exclamation-triangle"></i> Konfirmasi</h3>
+                <button class="modal-close" onclick="closeModal('confirmModal')">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage">Apakah Anda yakin ingin melanjutkan?</p>
+                <div class="modal-actions">
+                    <button class="btn btn-secondary" onclick="closeModal('confirmModal')">
+                        <span>Batal</span>
+                    </button>
+                    <button class="btn btn-danger" id="confirmAction">
+                        <span>Ya, Lanjutkan</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -461,4 +543,4 @@
     <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <script src="script.js"></script>
 </body>
-    </html>
+                </html>
